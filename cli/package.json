@@ -1,0 +1,12 @@
+{
+  "name": "loren-framework-cli",
+  "version": "1.0.0",
+  "main": "index.js",
+  "bin": {
+    "loren": "./index.js"
+  },
+  "dependencies": {
+    "commander": "^11.0.0",
+    "fs-extra": "^11.1.0"
+  }
+}

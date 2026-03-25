@@ -36,7 +36,7 @@ program
     .description('Add a module from GitHub')
     .action(async (repo, alias) => {
     const parts = repo.split('/');
-    let folderName = alias || parts[1].split('#')[0]; // Gets "blink"
+    let folderName = alias || parts[1].split('#')[0]; 
     
     if (parts[2]) {
         folderName = parts[1].split('#')[0];

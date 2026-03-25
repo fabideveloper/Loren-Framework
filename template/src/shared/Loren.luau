@@ -5,11 +5,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 -- Heart
+--[[
+    Just like love, it helps you grow!
+    A framework that once ignited, never burns out.
+]]
 local Loren = {}
 
 Loren.IsServer = RunService:IsServer()
 Loren.IsClient = RunService:IsClient()
-Loren.DidStart = false
+Loren.WasAwaken = false
 
 local Services = {}
 local Controllers: { [string]: any } = {}
@@ -25,8 +29,8 @@ local Controllers: { [string]: any } = {}
 ]]
 
 function Loren.AddControllers(container: Instance | { Instance }): boolean
-	if Loren.DidStart then
-		warn("Cannot add controllers after Loren has been started.")
+	if Loren.WasAwaken then
+		warn("Cannot add controllers after Loren has been awakened.")
 		return false
 	end
 
@@ -59,8 +63,8 @@ end
     Loren.AddServices(game:GetService("ServerScriptService").Services)
 ]]
 function Loren.AddServices(container: Instance | { Instance }): boolean
-	if Loren.DidStart then
-		warn("Cannot add services after Loren has been started.")
+	if Loren.WasAwaken then
+		warn("Cannot add services after Loren has been awakened.")
 		return false
 	end
 	if not Loren.IsServer then
@@ -91,12 +95,12 @@ end
      Example usage:
      Loren:Start()
 ]]
-function Loren:Start()
-	if self.DidStart then
-		warn("Loren has already been started.")
+function Loren:SetOnFire()
+	if self.WasAwaken then
+		warn("Loren has already been awakened.")
 		return
 	end
-	self.DidStart = true
+	self.WasAwaken = true
 	print("Loren Framework Initialized")
 end
 

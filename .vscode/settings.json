@@ -1,0 +1,4 @@
+{
+    "stylua.targetReleaseVersion": "latest",
+    "luau-lsp.plugin.enabled": true
+}

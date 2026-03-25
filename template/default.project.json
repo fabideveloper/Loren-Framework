@@ -4,7 +4,7 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "Shared": { "$path": "src/shared" },
-      "LorenModules": { "$path": "loren_modules" }
+      "LorenPackages": { "$path": "../loren_packages" }
     },
     "ServerScriptService": {
       "Server": { "$path": "src/server" }

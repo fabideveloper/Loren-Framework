@@ -1,5 +1,5 @@
 {
-    "name": "froblox-development",
+    "name": "project",
     "tree": {
         "$className": "DataModel",
         "ReplicatedStorage": {

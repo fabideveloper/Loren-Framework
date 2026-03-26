@@ -80,6 +80,53 @@ program
   });
 
 program
+  .command('make <type> <name> [is_blank]')
+  .description('Create a new service or controller')
+  .action((type, name, is_blank) => {
+    const root = process.cwd();
+    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
+      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
+    }
+
+    const typeLower = type.toLowerCase();
+    let subFolder = '';
+
+    if (typeLower === 'service') {
+      subFolder = 'src/server/Services';
+    } else if (typeLower === 'controller') {
+      subFolder = 'src/client/Controllers';
+    } else {
+      return console.error(`(LORENঌ) Error: Type must be 'service' or 'controller'.`);
+    }
+
+    const filePath = path.join(root, subFolder, `${name}.luau`);
+
+    if (fs.existsSync(filePath)) {
+      return console.error(`(LORENঌ) Error: ${name} already exists.`);
+    }
+
+    let content = '';
+    if (is_blank !== '') {
+      // Boilerplate for the blank flag
+      content = `local ${name} = {\n\tDependencies = {}\n}\n\nfunction ${name}:LorenIgnite()\n\nend\n\nfunction ${name}:LorenBurn()\n\nend\n\nreturn ${name}`;
+    } else {
+      //   IMPLEMENT FETCHING LATER!!!!
+      return console.log(`(LORENঌ) Future implementation: Fetching existing ${type} '${name}'...`);
+    }
+
+    try {
+      fs.outputFileSync(filePath, content);
+      console.log(`(LORENঌ) Successfully created ${name} at ${subFolder}`);
+
+      if (hasRojo()) {
+        execSync('rojo sourcemap default.project.json --output sourcemap.json', { stdio: 'ignore' });
+      }
+    } catch (err) {
+      console.error(`(LORENঌ) Failed to create file:`, err.message);
+    }
+  });
+
+program
   .command('add <repo> [alias]')
   .description('Add a module from GitHub into loren_packages')
   .action(async (repo, alias) => {

@@ -1,4 +1,5 @@
 --!strict
+-- o iubesc pe lore
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 

@@ -1,0 +1,26 @@
+{
+    "name": "froblox-development",
+    "tree": {
+        "$className": "DataModel",
+        "ReplicatedStorage": {
+            "Shared": {
+                "$path": "src/shared"
+            },
+            "LorenPackages": {
+                "$path": "loren_packages"
+            }
+        },
+        "ServerScriptService": {
+            "Server": {
+                "$path": "src/server"
+            }
+        },
+        "StarterPlayer": {
+            "StarterPlayerScripts": {
+                "Client": {
+                    "$path": "src/client"
+                }
+            }
+        }
+    }
+}

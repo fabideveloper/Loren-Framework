@@ -1,5 +1,5 @@
 {
-  "name": "loren-framework-cli",
+  "name": "loren-framework",
   "version": "1.0.0",
   "main": "index.js",
   "bin": {

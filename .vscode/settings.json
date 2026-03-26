@@ -1,4 +1,8 @@
 {
     "stylua.targetReleaseVersion": "latest",
-    "luau-lsp.plugin.enabled": true
+    "luau-lsp.plugin.enabled": true,
+    "luau-lsp.sourcemap.autogenerate": true,
+    "luau-lsp.rojo.projectPath": "project/default.project.json",
+    "luau-lsp.sourcemap.rojoProjectFile": "project/default.project.json",
+    "luau-lsp.sourcemap.sourcemapFile": "project/sourcemap.json"
 }

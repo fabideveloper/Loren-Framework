@@ -11,6 +11,8 @@ Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathin
 | :--- | :--- |
 | **loren init <name>** | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
 | **loren add <user/repo>** | Clones a GitHub module into loren_packages and updates autocomplete instantly. |
+| **make <type> <name> [is_blank]** | Create a new service or controller. Is blank will create a standard service or controller with all of the default functionalities.|
+
 
 ---
 

@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.0.0)
+# LOREN-FRAMEWORK (v1.1.0)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -9,36 +9,81 @@ Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathin
 
 | Command | Description |
 | :--- | :--- |
-| **loren init <name>** | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
-| **loren add <user/repo>** | Clones a GitHub module into loren_packages and updates autocomplete instantly. |
+| `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
+| `loren add <user/repo>` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
+| `loren make <type> <name>` | Forges a new service or controller with full v1.1.0 boilerplate. |
 
 ---
 
 ## Core Architecture
 
-Loren uses a Dependency Injection system. You don't need to manually require() your internal modules; simply list them in the Dependencies table, and Loren handles the resolution.
+oren is built on a Dependency Injection (DI) system. You never have to manually require() your internal modules; simply list their names in the Dependencies table, and Loren resolves them automatically during the boot sequence.
 
 ### Module Structure
+A simple structure example:
+
 ```lua
-local TestController = {
-    -- List the names of the modules you need here
-    Dependencies = {"TestController2"} 
+-- a Simple service
+local Service = { 
+    Dependencies = {"AnotherService"}; -- any service you want
+    Client = { };
+    Signals = {"SendData"};
+    Middleware = { 
+        GetDataMultiplied = function(_, multiplier : number) -- check if multiplier is postiive before sending data back to the player
+            return multiplier > 0
+        end
+    };
 }
 
--- Phase 1: Ignition (Setup variables & logic)
-function TestController:LorenIgnite()
-    local buddy = self.Dependencies.TestController2
-    print("Link established with:", buddy)
+-- Init
+function Service:LorenIgnite()
+    self.someData = "I am data"
 end
 
--- Phase 2: Burn (Runs in a separate thread)
-function TestController:LorenBurn()
-    print("Loren is burning!")
+function Service.Client:GetDataMultiplied(player : Player, multiplier : number) -- Returns a promise
+    return self.Server.someData
 end
 
-return TestController
+function Service:LorenBurn()
+    -- Fire a signal to everyone
+    self.SendData:FireAll(self.someData)
+end
+
+-- a Simple Controller
+local Controller = {
+    Dependencies = {"AnotherController", "Service"}; -- any controller/service you want. We require the previous service
+}
+
+function Controller:LorenIgnite()
+    print("I am ignited!")
+end
+
+function Controller:LorenBurn()
+    -- Pull the Proxy from our resolved dependencies
+    local PointsService = self.Dependencies.Service
+
+    -- Calling a Method (Returns a Promise)
+    PointsService:GetDataMultiplied(10):andThen(function(result)
+        print("Server says:", result)
+    end):catch(warn)
+
+    -- Connecting to a Signal
+    PointsService.SendData:Connect(function(data)
+        print("Received Signal Data:", data)
+    end)
+end
+
+-- Bootstraping looks like this:
+
+local Loren = require("path to loren")
+
+Loren.AddServices("path to services") / Loren.AddControllers("path to controllers")
+Loren:SetOnFire()
 ```
-Note on v1.0.0: In this current version, Controllers cannot yet access Services directly. This cross-boundary communication is slated for a future update.
+
+-> Note on v1.0.0: In this current version, Controllers cannot yet access Services directly. This cross-boundary communication is slated for a future update.
+
+->  Note on v1.1.0: Cross-boundary communication is now fully operational. Controllers can include Services in their dependencies to access the binary bridge and call server-side logic via Promises.
 
 ### Documentation
-Full documentation, including advanced networking, API references, and cross-boundary communication, will be released in later versions. For now, keep it simple, keep it light, and keep it burning.
+Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

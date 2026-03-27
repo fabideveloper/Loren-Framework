@@ -6,7 +6,7 @@ const degit = require('degit');
 const { execSync } = require('child_process');
 
 program
-  .version('1.0.0')
+  .version('1.1.0')
   .description('Loren-Framework - Burning like a beating heart.');
 
 const hasRojo = () => {
@@ -80,9 +80,9 @@ program
   });
 
 program
-  .command('make <type> <name> [is_blank]')
-  .description('Create a new service or controller')
-  .action((type, name, is_blank) => {
+  .command('make <type> <name>')
+  .description('Create a new service or controller with Loren v1.2.0 boilerplate')
+  .action((type, name) => {
     const root = process.cwd();
     if (!fs.existsSync(path.join(root, 'default.project.json'))) {
       return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
@@ -90,11 +90,53 @@ program
 
     const typeLower = type.toLowerCase();
     let subFolder = '';
+    let content = '';
 
     if (typeLower === 'service') {
       subFolder = 'src/server/Services';
+      content = `local ${name} = {
+	Dependencies = {},
+	
+	-- Functions inside Client are exposed to the network (Binary Bridge)
+	Client = {},
+	
+	-- List signal names here. Loren injects them automatically.
+	Signals = {},
+	
+	-- Optional: Security checks for Client functions
+	Middleware = {},
+}
+
+-- Called when the framework initializes (Synchronous)
+function ${name}:LorenIgnite()
+	
+end
+
+-- Called after all modules are ignited (Asynchronous)
+function ${name}:LorenBurn()
+	
+end
+
+return ${name}`;
+
     } else if (typeLower === 'controller') {
       subFolder = 'src/client/Controllers';
+      content = `local ${name} = {
+	Dependencies = {},
+}
+
+-- Called when the framework initializes (Synchronous)
+function ${name}:LorenIgnite()
+	
+end
+
+-- Called after all modules are ignited (Asynchronous)
+function ${name}:LorenBurn()
+	
+end
+
+return ${name}`;
+
     } else {
       return console.error(`(LORENঌ) Error: Type must be 'service' or 'controller'.`);
     }
@@ -102,21 +144,12 @@ program
     const filePath = path.join(root, subFolder, `${name}.luau`);
 
     if (fs.existsSync(filePath)) {
-      return console.error(`(LORENঌ) Error: ${name} already exists.`);
-    }
-
-    let content = '';
-    if (is_blank !== '') {
-      // Boilerplate for the blank flag
-      content = `local ${name} = {\n\tDependencies = {}\n}\n\nfunction ${name}:LorenIgnite()\n\nend\n\nfunction ${name}:LorenBurn()\n\nend\n\nreturn ${name}`;
-    } else {
-      //   IMPLEMENT FETCHING LATER!!!!
-      return console.log(`(LORENঌ) Future implementation: Fetching existing ${type} '${name}'...`);
+      return console.error(`(LORENঌ) Error: ${name} already exists at ${subFolder}`);
     }
 
     try {
       fs.outputFileSync(filePath, content);
-      console.log(`(LORENঌ) Successfully created ${name} at ${subFolder}`);
+      console.log(`(LORENঌ) Successfully forged ${typeLower}: ${name}`);
 
       if (hasRojo()) {
         execSync('rojo sourcemap default.project.json --output sourcemap.json', { stdio: 'ignore' });

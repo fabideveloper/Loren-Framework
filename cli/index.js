@@ -81,7 +81,7 @@ program
 
 program
   .command('make <type> <name>')
-  .description('Create a new service or controller with Loren v1.2.0 boilerplate')
+  .description('Create a new service or controller with Loren v1.1.0 boilerplate')
   .action((type, name) => {
     const root = process.cwd();
     if (!fs.existsSync(path.join(root, 'default.project.json'))) {
@@ -97,7 +97,6 @@ program
       content = `local ${name} = {
 	Dependencies = {},
 	
-	-- Functions inside Client are exposed to the network (Binary Bridge)
 	Client = {},
 	
 	-- List signal names here. Loren injects them automatically.

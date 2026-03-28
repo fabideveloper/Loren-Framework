@@ -293,49 +293,63 @@ function Loren:SetOnFire(): any
 			Bridge.OnServerEvent:Connect(function(player, header, ...)
 				local now = os.clock()
 				local data: { Count: number, LastReset: number } = CallTracker[player] or { Count = 0, LastReset = now }
+
 				if now - data.LastReset >= 1 then
-					data.Count = 0
-					data.LastReset = now
-				end
-				data.Count += 1
-				CallTracker[player] = data
-				if data.Count > RATE_LIMIT then
-					return
+					data.Count, data.LastReset = 0, now
 				end
 
+				data.Count += 1
+				CallTracker[player] = data
+
+				if data.Count > RATE_LIMIT then
+					return -- Silently drop packet if threshold is exceeded
+				end
+				-- Ensures the packet follows the 5-byte Binary Protocol
 				if typeof(header) ~= "buffer" or buffer.len(header) ~= 5 then
 					return
 				end
+
 				local reqId, sId, mId, pCount = UnpackHeader(header)
 				local actualCount = select("#", ...)
 
+				-- Immediate rejection if the client lies about argument count or exceeds global max
 				if actualCount ~= pCount or actualCount > MAX_ARGUMENTS then
-					warn("(LORENঌ) Blocked: Argument mismatch from " .. player.Name)
+					warn(
+						string.format(
+							"(LORENঌ) Security: Dropping desynced payload from %s (Header claimed %d, received %d)",
+							player.Name,
+							pCount,
+							actualCount
+						)
+					)
 					return
 				end
 
 				local sName, mName = IdToService[sId], IdToMethod[sId][mId]
 				local service = Services[sName]
+
 				if not service or not service.Client[mName] then
 					return
 				end
 
+				-- We pack the arguments to strictly isolate the Declared parameters from "junk" data
+				local args = table.pack(...)
+
 				if service.Middleware and typeof(service.Middleware[mName]) == "function" then
-					local success = service.Middleware[mName](player, ...)
-					if not success then
+					-- Pass only the declared number of arguments to the security check
+					local ok = service.Middleware[mName](player, table.unpack(args, 1, pCount))
+					if not ok then
 						warn(
-							string.format(
-								"(LORENঌ) Blocked: %s called %s:%s (Middleware Rejected)",
-								player.Name,
-								sName,
-								mName
-							)
+							string.format("(LORENঌ) Blocked: %s:%s rejected call from %s", sName, mName, player.Name)
 						)
 						return Bridge:FireClient(player, reqId, nil)
 					end
 				end
 
-				local result = Services[sName].Client[mName](Services[sName].Client, player, ...)
+				-- We unpack exactly pCount to ensure the service logic receives a clean, verified payload
+				local result = service.Client[mName](service.Client, player, table.unpack(args, 1, pCount))
+
+				-- Return result via the Bridge using the RequestId
 				Bridge:FireClient(player, reqId, result)
 			end)
 

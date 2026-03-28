@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.1.0)
+# LOREN-FRAMEWORK (v1.2.0)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -12,12 +12,14 @@ Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathin
 | `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
 | `loren add <user/repo>` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
 | `loren make <type> <name>` | Forges a new service or controller with full v1.1.0 boilerplate. |
+| `loren inject <type> <name` | Injects a pre-built module from your loren_premade folder into your active source code. |
+| `loren ignite` | Calls `rojo serve` automatically |
 
 ---
 
 ## Core Architecture
 
-oren is built on a Dependency Injection (DI) system. You never have to manually require() your internal modules; simply list their names in the Dependencies table, and Loren resolves them automatically during the boot sequence.
+Loren is built on a Dependency Injection (DI) system. You never have to manually require() your internal modules; simply list their names in the Dependencies table, and Loren resolves them automatically during the boot sequence.
 
 ### Module Structure
 A simple structure example:
@@ -73,8 +75,8 @@ function Controller:LorenBurn()
     end)
 end
 
--- Bootstraping looks like this:
-
+-- Bootstrapping
+-- Getting the framework running is incredibly simple:
 local Loren = require("path to loren")
 
 Loren.AddServices("path to services") / Loren.AddControllers("path to controllers")
@@ -84,6 +86,8 @@ Loren:SetOnFire()
 -> Note on v1.0.0: In this current version, Controllers cannot yet access Services directly. This cross-boundary communication is slated for a future update.
 
 ->  Note on v1.1.0: Cross-boundary communication is now fully operational. Controllers can include Services in their dependencies to access the binary bridge and call server-side logic via Promises.
+
+-> Note on v1.2.0: The CLI has been completely overhauled for a zero-friction developer experience. Toolchain initialization (Aftman, Rojo, and VS Code settings) is now fully automated during `loren init`, and you can now use `loren inject` to instantly drop your own reusable templates from `loren_premade` directly into your active game logic.
 
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.2.0)
+# LOREN-FRAMEWORK (v1.2.1)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -89,5 +89,6 @@ Loren:SetOnFire()
 
 -> Note on v1.2.0: The CLI has been completely overhauled for a zero-friction developer experience. Toolchain initialization (Aftman, Rojo, and VS Code settings) is now fully automated during `loren init`, and you can now use `loren inject` to instantly drop your own reusable templates from `loren_premade` directly into your active game logic.
 
+-> Note on v1.2.1: Bug fixes and security changes
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

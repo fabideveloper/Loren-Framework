@@ -1,7 +1,7 @@
 --!strict
--- o iubesc pe lore
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 
 local Promise = require(ReplicatedStorage.LorenPackages.Promise)
 
@@ -10,32 +10,41 @@ Loren.IsServer = RunService:IsServer()
 Loren.IsClient = RunService:IsClient()
 Loren.IsOnFire = false
 
--- [[ Networking State ]]
 local Bridge: RemoteEvent
 local Handshake: RemoteFunction
 
-local ServiceToId: { [string]: number } = {}
-local IdToService: { [number]: string } = {}
-local MethodToId: { [number]: { [string]: number } } = {}
-local IdToMethod: { [number]: { [number]: string } } = {}
-local SignalToId: { [number]: { [string]: number } } = {}
-local IdToSignal: { [number]: { [number]: string } } = {}
+local ServiceToId, IdToService = {}, {}
+local MethodToId, IdToMethod = {}, {}
+local SignalToId, IdToSignal = {}, {}
 
-local ClientSignals = {}
-local PendingRequests = {}
-local RequestId = 0
+local ClientSignals, PendingRequests = {}, {}
+local RequestId, Pool, PoolSize = 0, {}, 0
 
-local RATE_LIMIT = 50 -- Max requests per second per player
-local MAX_ARGUMENTS = 20 -- Max parameters allowed in a single call
-
+local RATE_LIMIT = 50
+local MAX_ARGUMENTS = 20
 local CallTracker: { [Player]: { Count: number, LastReset: number } } = {}
 
 local Services: { [string]: any } = {}
 local Controllers: { [string]: any } = {}
 
--- [[ Binary Internal Helpers ]]
+-- [[ Internal Helpers ]]
+local function GetBuffer(): buffer
+	if PoolSize > 0 then
+		local b = Pool[PoolSize]
+		Pool[PoolSize] = nil
+		PoolSize -= 1
+		return b
+	end
+	return buffer.create(5)
+end
+
+local function ReleaseBuffer(b: buffer)
+	PoolSize += 1
+	Pool[PoolSize] = b
+end
+
 local function PackHeader(reqId: number, sId: number, mId: number, pCount: number): buffer
-	local b = buffer.create(5)
+	local b = GetBuffer()
 	buffer.writeu16(b, 0, reqId)
 	buffer.writeu8(b, 2, sId)
 	buffer.writeu8(b, 3, mId)
@@ -58,11 +67,13 @@ end
 function Signal:Fire(player: Player, ...)
 	local header = PackHeader(0, self._sId, self._sigId, select("#", ...))
 	Bridge:FireClient(player, header, ...)
+	ReleaseBuffer(header)
 end
 
 function Signal:FireAll(...)
 	local header = PackHeader(0, self._sId, self._sigId, select("#", ...))
 	Bridge:FireAllClients(header, ...)
+	ReleaseBuffer(header)
 end
 
 function Signal:Connect(callback: (...any) -> ())
@@ -83,49 +94,34 @@ function Signal:_Execute(...)
 	end
 end
 
--- [[ Internal Core Helpers ]]
+-- [[ Dependency Engine ]]
 local function GetSuggestion(name: string): (string, string)
 	local bestMatch, category, highestScore = "<unknown>", "<unknown>", 0
-	local function score(target: string, input: string)
-		local t, i = target:lower(), input:lower()
+	local function score(t: string, i: string)
+		t, i = t:lower(), i:lower()
 		if t == i then
 			return 10
 		end
 		if t:find(i) then
 			return 5
 		end
-		if t:sub(1, 3) == i:sub(1, 3) then
-			return 3
-		end
 		return 0
 	end
 
-	local services = (Loren.IsServer and Services or ServiceToId) :: { [string]: any }
-	for sName in services do
-		local s = score(sName, name)
+	local registry :{ [string]: any } = (Loren.IsServer and Services or ServiceToId)
+	for n in registry do
+		local s = score(n, name)
 		if s > highestScore then
-			highestScore, bestMatch, category = s, sName, "Service"
+			highestScore, bestMatch, category = s, n, "Service"
 		end
 	end
-	for cName in Controllers do
-		local s = score(cName, name)
+	for n in Controllers do
+		local s = score(n, name)
 		if s > highestScore then
-			highestScore, bestMatch, category = s, cName, "Controller"
+			highestScore, bestMatch, category = s, n, "Controller"
 		end
 	end
 	return bestMatch, category
-end
-
-local function ThrowDependencyError(moduleName: string, depName: string)
-	local suggestion, typeFound = GetSuggestion(depName)
-	local message = string.format(
-		"\n\t\t[LORENঌ FATAL ERROR]\n\t\t➤ Module [%s] requires '%s', but it is missing.\n\t\t➤ CHECK: Did you mean the %s: '%s'?\n",
-		moduleName,
-		depName,
-		typeFound,
-		suggestion
-	)
-	error(message, 0)
 end
 
 local function CreateServiceProxy(serviceName: string)
@@ -144,31 +140,37 @@ local function CreateServiceProxy(serviceName: string)
 			end
 
 			return function(_, ...)
-				local args = { ... }
-				local argCount = select("#", ...)
-				return Promise.new(function(resolve, reject)
-					RequestId = (RequestId + 1) % 65535
+				local args, argCount = { ... }, select("#", ...)
+				return Promise.new(function(resolve, reject, onCancel)
+					RequestId = (RequestId % 65535) + 1
 					local curId, mId = RequestId, (MethodToId[sId] and MethodToId[sId][key])
 					if not sId or not mId then
-						return reject("(LORENঌ) Unknown Method: " .. key)
+						return reject("(LORENঌ) Missing Method: " .. key)
 					end
 
+					local header = PackHeader(curId, sId, mId, argCount)
 					PendingRequests[curId] = { resolve = resolve, reject = reject }
-					Bridge:FireServer(PackHeader(curId, sId, mId, argCount), table.unpack(args))
-
-					task.delay(10, function()
+					local timeoutThread = task.delay(10, function()
+            			if PendingRequests[curId] then
+                			PendingRequests[curId].reject("(LORENঌ) Timeout")
+                			PendingRequests[curId] = nil
+            			end
+        			end)
+					onCancel(function()
 						if PendingRequests[curId] then
-							PendingRequests[curId].reject("(LORENঌ) Timeout: " .. serviceName)
-							PendingRequests[curId] = nil
+							PendingRequests[curId]  = nil
 						end
-					end)
+            			task.cancel(timeoutThread) 
+       				end)
+					Bridge:FireServer(header, table.unpack(args))
+					ReleaseBuffer(header)
 				end)
 			end
 		end,
 	})
 end
 
-local function GetModule(name: string, requesterName: string): any
+local function GetModule(name: string, requester: string)
 	if Loren.IsClient then
 		if Controllers[name] then
 			return Controllers[name]
@@ -179,50 +181,51 @@ local function GetModule(name: string, requesterName: string): any
 	elseif Services[name] then
 		return Services[name]
 	end
-	return ThrowDependencyError(requesterName, name)
+	local sug, cat = GetSuggestion(name)
+	error(
+		string.format("\n[LORENঌ FATAL]\nModule [%s] needs '%s'.\nDid you mean %s: '%s'?", requester, name, cat, sug),
+		0
+	)
 end
 
 -- [[ Public API ]]
 
 --[[
-	Loads ModuleScripts from a container (Instance or Table) into the Controller registry.
-	Only active on the Client.
+	@ Client
+	Adds a list of ModuleScripts (or an instance containing module scripts as children) to the controllers registry
 ]]
-function Loren.AddControllers(container: Instance | { Instance }): boolean
+function Loren.AddControllers(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsClient then
-		return false
+		return
 	end
-	local instances = (typeof(container) == "Instance" and container:GetChildren() or container) :: { Instance }
-	for _, child in instances do
+	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: {Instance} do
 		if child:IsA("ModuleScript") then
-			Controllers[child.Name] = require(child) :: ScriptContext
+			Controllers[child.Name] = require(child) :: any
 		end
 	end
-	return true
 end
-
 --[[
-	Loads ModuleScripts from a container (Instance or Table) into the Service registry.
-	Only active on the Server.
+	@ Server
+	Adds a list of ModuleScripts (or an instance containing module scripts as children) to the services registry
 ]]
-function Loren.AddServices(container: Instance | { Instance }): boolean
+function Loren.AddServices(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsServer then
-		return false
+		return
 	end
-	local instances = (typeof(container) == "Instance" and container:GetChildren() or container) :: { Instance }
-	for _, child in instances do
+	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: {Instance} do
 		if child:IsA("ModuleScript") then
-			Services[child.Name] = require(child) :: ScriptContext
+			Services[child.Name] = require(child) :: any
 		end
 	end
-	return true
 end
 
---[[
-	Initializes the framework. Performs the binary handshake, resolves all dependencies, 
-	and triggers the LorenIgnite and LorenBurn lifecycle phases.
-]]
-function Loren:SetOnFire(): any
+--[[ 
+	@ Server
+	@ Client
+	Runs LorenIgnite (Init) and LorenBurn (Start) on all Services/Controllers added to the registry
+	Boots the Bridges and Handshakes between modules
+]]	
+function Loren:SetOnFire()
 	return Promise.new(function(resolve, reject)
 		if self.IsOnFire then
 			return resolve(self)
@@ -235,30 +238,28 @@ function Loren:SetOnFire(): any
 			Bridge.Parent, Handshake.Parent = ReplicatedStorage, ReplicatedStorage
 
 			local sIdx = 0
-			for sName, service in Services do
+			for sName, s in Services do
 				sIdx += 1
-				if service.Client then
-					service.Client.Server = service
+				if s.Client then
+					s.Client.Server = s
 				end
 				ServiceToId[sName], IdToService[sIdx] = sIdx, sName
 				MethodToId[sIdx], IdToMethod[sIdx], SignalToId[sIdx], IdToSignal[sIdx] = {}, {}, {}, {}
 
-				if service.Client then
+				if s.Client then
 					local mIdx = 0
-					for mName, func in service.Client do
-						if typeof(func) == "function" then
+					for mName, f in s.Client do
+						if typeof(f) == "function" then
 							mIdx += 1
 							MethodToId[sIdx][mName], IdToMethod[sIdx][mIdx] = mIdx, mName
 						end
 					end
 				end
 
-				if service.Signals then
-					local sigIdx = 0
-					for _, sigName in ipairs(service.Signals) do
-						sigIdx += 1
+				if s.Signals then
+					for sigIdx, sigName in ipairs(s.Signals) do
 						SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
-						service[sigName] = Signal.new(sIdx, sigIdx)
+						s[sigName] = Signal.new(sIdx, sigIdx)
 					end
 				end
 			end
@@ -266,142 +267,112 @@ function Loren:SetOnFire(): any
 				return ServiceToId, IdToService, MethodToId, IdToMethod, SignalToId, IdToSignal
 			end
 		else
-			Bridge = ReplicatedStorage:WaitForChild("LorenBridge") :: RemoteEvent
-			Handshake = ReplicatedStorage:WaitForChild("LorenHandshake") :: RemoteFunction
-			local sToId, idToS, mToId, idToM, sigToId, idToSig = Handshake:InvokeServer()
-			ServiceToId, IdToService, MethodToId, IdToMethod, SignalToId, IdToSignal =
-				sToId, idToS, mToId, idToM, sigToId, idToSig
+			Bridge = ReplicatedStorage:WaitForChild("LorenBridge")
+			Handshake = ReplicatedStorage:WaitForChild("LorenHandshake")
+			ServiceToId, IdToService, MethodToId, IdToMethod, SignalToId, IdToSignal = Handshake:InvokeServer()
 		end
 
 		local registry = (self.IsServer and Services or Controllers)
-		for name, module in registry do
-			if typeof(module) == "table" and typeof(module.Dependencies) == "table" then
-				local resolved = {}
-				for _, depName in module.Dependencies do
-					local ok, dep = pcall(GetModule, depName, name)
+		for name, mod in registry do
+			if typeof(mod) == "table" and mod.Dependencies then
+				local res = {}
+				for _, d in mod.Dependencies do
+					local ok, dep = pcall(GetModule, d, name)
 					if ok then
-						resolved[depName] = dep
+						res[d] = dep
 					else
 						return reject(dep)
 					end
 				end
-				module.Dependencies = resolved
+				mod.Dependencies = res
 			end
 		end
 
 		if self.IsServer then
 			Bridge.OnServerEvent:Connect(function(player, header, ...)
 				local now = os.clock()
-				local data: { Count: number, LastReset: number } = CallTracker[player] or { Count = 0, LastReset = now }
-
-				if now - data.LastReset >= 1 then
-					data.Count, data.LastReset = 0, now
+				local tracker :{ Count: number, LastReset: number }= CallTracker[player] or { Count = 0, LastReset = now }
+				if now - tracker.LastReset >= 1 then
+					tracker.Count, tracker.LastReset = 0, now
+				end
+				tracker.Count += 1
+				CallTracker[player] = tracker
+				if tracker.Count > RATE_LIMIT then
+					return
 				end
 
-				data.Count += 1
-				CallTracker[player] = data
-
-				if data.Count > RATE_LIMIT then
-					return -- Silently drop packet if threshold is exceeded
-				end
-				-- Ensures the packet follows the 5-byte Binary Protocol
 				if typeof(header) ~= "buffer" or buffer.len(header) ~= 5 then
 					return
 				end
-
 				local reqId, sId, mId, pCount = UnpackHeader(header)
-				local actualCount = select("#", ...)
-
-				-- Immediate rejection if the client lies about argument count or exceeds global max
-				if actualCount ~= pCount or actualCount > MAX_ARGUMENTS then
-					warn(
-						string.format(
-							"(LORENঌ) Security: Dropping desynced payload from %s (Header claimed %d, received %d)",
-							player.Name,
-							pCount,
-							actualCount
-						)
-					)
+				if select("#", ...) ~= pCount or pCount > MAX_ARGUMENTS then
 					return
 				end
 
-				local sName, mName = IdToService[sId], IdToMethod[sId][mId]
-				local service = Services[sName]
-
-				if not service or not service.Client[mName] then
+				local sName = IdToService[sId]
+				local mName = sName and IdToMethod[sId] and IdToMethod[sId][mId]
+				local s = sName and Services[sName]
+				if not s or not mName or not s.Client[mName] then
 					return
 				end
 
-				-- We pack the arguments to strictly isolate the Declared parameters from "junk" data
 				local args = table.pack(...)
-
-				if service.Middleware and typeof(service.Middleware[mName]) == "function" then
-					-- Pass only the declared number of arguments to the security check
-					local ok = service.Middleware[mName](player, table.unpack(args, 1, pCount))
+				if s.Middleware and s.Middleware[mName] then
+					local ok, err = s.Middleware[mName](player, table.unpack(args, 1, pCount))
 					if not ok then
-						warn(
-							string.format("(LORENঌ) Blocked: %s:%s rejected call from %s", sName, mName, player.Name)
-						)
-						return Bridge:FireClient(player, reqId, nil)
+						return Bridge:FireClient(player, reqId, err or "Denied", false)
 					end
 				end
 
-				-- We unpack exactly pCount to ensure the service logic receives a clean, verified payload
-				local result = service.Client[mName](service.Client, player, table.unpack(args, 1, pCount))
-
-				-- Return result via the Bridge using the RequestId
-				Bridge:FireClient(player, reqId, result)
+				local success, res = pcall(s.Client[mName], s.Client, player, table.unpack(args, 1, pCount))
+				Bridge:FireClient(player, reqId, res, success)
 			end)
-
-			game:GetService("Players").PlayerRemoving:Connect(function(player)
-				if CallTracker[player] then
-					CallTracker[player] = nil
-				end
+			Players.PlayerRemoving:Connect(function(p)
+				CallTracker[p] = nil
 			end)
 		else
-			Bridge.OnClientEvent:Connect(function(headerOrId, result, ...)
-				if typeof(headerOrId) == "buffer" then
-					if buffer.len(headerOrId) ~= 5 then
-						return
-					end
-
-					local _, sId, sigId = UnpackHeader(headerOrId)
+			Bridge.OnClientEvent:Connect(function(hid, res, success, ...)
+				if typeof(hid) == "buffer" then
+					local _, sId, sigId = UnpackHeader(hid)
 					if ClientSignals[sId] and ClientSignals[sId][sigId] then
-						ClientSignals[sId][sigId]:_Execute(result, ...)
+						ClientSignals[sId][sigId]:_Execute(res, ...)
 					end
-				elseif PendingRequests[headerOrId] then
-					PendingRequests[headerOrId].resolve(result)
-					PendingRequests[headerOrId] = nil
+				elseif PendingRequests[hid] then
+					if success == false then
+						PendingRequests[hid].reject(res)
+					else
+						PendingRequests[hid].resolve(res)
+					end
+					PendingRequests[hid] = nil
 				end
 			end)
 		end
 
-		for _, module in registry do
-			if module.LorenIgnite then
-				module:LorenIgnite()
+		for _, mod in registry do
+			if mod.LorenIgnite then
+				mod:LorenIgnite()
 			end
 		end
-		for _, module in registry do
-			if module.LorenBurn then
-				task.spawn(module.LorenBurn, module)
+		for _, mod in registry do
+			if mod.LorenBurn then
+				task.spawn(mod.LorenBurn, mod)
 			end
 		end
-
-		print("(LORENঌ) Awakened on " .. (self.IsServer and "Server" or "Client"))
+		print("(LORENঌ) Burning on " .. (Loren.IsServer and "Server" or "Client"))
 		resolve(self)
+		
 	end)
 end
 
---[[
-	Retrieves a required package from ReplicatedStorage.LorenPackages.
+--[[ 
+	@ Server
+	@ Client
+	Imports a module that sits inside LorenPackages
 ]]
-function Loren.import(moduleName: string): any
-	local packages = ReplicatedStorage:FindFirstChild("LorenPackages") :: Folder
-	local found = packages and packages:FindFirstChild(moduleName)
-	if found then
-		return require(found) :: ScriptContext
-	end
-	error("(LORENঌ) Package '" .. moduleName .. "' not found.")
+function Loren.import(name: string)
+	local p = ReplicatedStorage:WaitForChild("LorenPackages")
+	local f = p and p:WaitForChild(name)
+	return f and require(f) :: any or error("(LORENঌ) Missing Package: " .. name)
 end
 
 return Loren

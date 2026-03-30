@@ -1,4 +1,29 @@
 --!strict
+
+--[[
+MIT License
+
+Copyright (c) 2026 Fabian
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+]]
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
@@ -108,7 +133,7 @@ local function GetSuggestion(name: string): (string, string)
 		return 0
 	end
 
-	local registry :{ [string]: any } = (Loren.IsServer and Services or ServiceToId)
+	local registry: { [string]: any } = (Loren.IsServer and Services or ServiceToId)
 	for n in registry do
 		local s = score(n, name)
 		if s > highestScore then
@@ -151,17 +176,17 @@ local function CreateServiceProxy(serviceName: string)
 					local header = PackHeader(curId, sId, mId, argCount)
 					PendingRequests[curId] = { resolve = resolve, reject = reject }
 					local timeoutThread = task.delay(10, function()
-            			if PendingRequests[curId] then
-                			PendingRequests[curId].reject("(LORENঌ) Timeout")
-                			PendingRequests[curId] = nil
-            			end
-        			end)
+						if PendingRequests[curId] then
+							PendingRequests[curId].reject("(LORENঌ) Timeout")
+							PendingRequests[curId] = nil
+						end
+					end)
 					onCancel(function()
 						if PendingRequests[curId] then
-							PendingRequests[curId]  = nil
+							PendingRequests[curId] = nil
 						end
-            			task.cancel(timeoutThread) 
-       				end)
+						task.cancel(timeoutThread)
+					end)
 					Bridge:FireServer(header, table.unpack(args))
 					ReleaseBuffer(header)
 				end)
@@ -198,7 +223,7 @@ function Loren.AddControllers(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsClient then
 		return
 	end
-	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: {Instance} do
+	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: { Instance } do
 		if child:IsA("ModuleScript") then
 			Controllers[child.Name] = require(child) :: any
 		end
@@ -212,7 +237,7 @@ function Loren.AddServices(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsServer then
 		return
 	end
-	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: {Instance} do
+	for _, child in (typeof(container) == "Instance" and container:GetChildren() or container) :: { Instance } do
 		if child:IsA("ModuleScript") then
 			Services[child.Name] = require(child) :: any
 		end
@@ -224,7 +249,7 @@ end
 	@ Client
 	Runs LorenIgnite (Init) and LorenBurn (Start) on all Services/Controllers added to the registry
 	Boots the Bridges and Handshakes between modules
-]]	
+]]
 function Loren:SetOnFire()
 	return Promise.new(function(resolve, reject)
 		if self.IsOnFire then
@@ -291,7 +316,8 @@ function Loren:SetOnFire()
 		if self.IsServer then
 			Bridge.OnServerEvent:Connect(function(player, header, ...)
 				local now = os.clock()
-				local tracker :{ Count: number, LastReset: number }= CallTracker[player] or { Count = 0, LastReset = now }
+				local tracker: { Count: number, LastReset: number } = CallTracker[player]
+					or { Count = 0, LastReset = now }
 				if now - tracker.LastReset >= 1 then
 					tracker.Count, tracker.LastReset = 0, now
 				end
@@ -325,7 +351,8 @@ function Loren:SetOnFire()
 				end
 
 				local success, res = pcall(s.Client[mName], s.Client, player, table.unpack(args, 1, pCount))
-				Bridge:FireClient(player, reqId, res, success)
+				local clientRes = success and res or "Internal Server Error"
+				Bridge:FireClient(player, reqId, clientRes, success)
 			end)
 			Players.PlayerRemoving:Connect(function(p)
 				CallTracker[p] = nil
@@ -360,19 +387,7 @@ function Loren:SetOnFire()
 		end
 		print("(LORENঌ) Burning on " .. (Loren.IsServer and "Server" or "Client"))
 		resolve(self)
-		
 	end)
-end
-
---[[ 
-	@ Server
-	@ Client
-	Imports a module that sits inside LorenPackages
-]]
-function Loren.import(name: string)
-	local p = ReplicatedStorage:WaitForChild("LorenPackages")
-	local f = p and p:WaitForChild(name)
-	return f and require(f) :: any or error("(LORENঌ) Missing Package: " .. name)
 end
 
 return Loren

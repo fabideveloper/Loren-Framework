@@ -6,7 +6,7 @@ const degit = require('degit');
 const { execSync } = require('child_process');
 
 program
-  .version('1.2.1')
+  .version('1.2.2')
   .description('Loren-Framework - Burning like a beating heart.');
 
 const hasRojo = (cwd = process.cwd()) => {
@@ -104,7 +104,7 @@ program
 
 program
   .command('make <type> <name>')
-  .description('Create a new service or controller with Loren v1.2.1 boilerplate')
+  .description('Create a new service or controller with Loren v1.2.2 boilerplate')
   .action((type, name) => {
     const root = process.cwd();
     if (!fs.existsSync(path.join(root, 'default.project.json'))) {
@@ -279,6 +279,34 @@ program
       console.log(`(LORENঌ) Module "${folderName}" added to loren_packages!`);
     } catch (err) {
       console.error(`(LORENঌ) Download failed: ${err.message}`);
+    }
+  });
+
+  program
+  .command('refresh')
+  .description('Manually refresh the Rojo sourcemap to update VS Code IntelliSense')
+  .action(() => {
+    const root = process.cwd();
+    
+    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
+      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
+    }
+
+    if (hasRojo(root)) {
+      try {
+        console.log(`(LORENঌ) Refreshing sourcemap...`);
+        
+        execSync('rojo sourcemap default.project.json --output sourcemap.json', { 
+          cwd: root, 
+          stdio: 'ignore' 
+        });
+        
+        console.log(`(LORENঌ) Sourcemap updated successfully!`);
+      } catch (err) {
+        console.error(`(LORENঌ) Failed to generate sourcemap:`, err.message);
+      }
+    } else {
+      console.error(`(LORENঌ) Error: Rojo is not installed or available in this directory.`);
     }
   });
 

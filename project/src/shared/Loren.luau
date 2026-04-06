@@ -150,11 +150,12 @@ local function GetSuggestion(name: string): (string, string)
 end
 
 local function CreateServiceProxy(serviceName: string)
-	return setmetatable({}, {
-		__index = function(_, key: string): any
-			local sId = ServiceToId[serviceName]
-			if SignalToId[sId] and SignalToId[sId][key] then
-				local sigId = SignalToId[sId][key]
+	local sId = ServiceToId[serviceName]
+
+	local signalsProxy = setmetatable({}, {
+		__index = function(_, sigKey: string): any
+			if SignalToId[sId] and SignalToId[sId][sigKey] then
+				local sigId = SignalToId[sId][sigKey]
 				if not ClientSignals[sId] then
 					ClientSignals[sId] = {}
 				end
@@ -162,6 +163,15 @@ local function CreateServiceProxy(serviceName: string)
 					ClientSignals[sId][sigId] = Signal.new(sId, sigId)
 				end
 				return ClientSignals[sId][sigId]
+			end
+			return nil
+		end,
+	})
+
+	return setmetatable({}, {
+		__index = function(_, key: string): any
+			if key == "Signals" then
+				return signalsProxy
 			end
 
 			return function(_, ...)
@@ -282,10 +292,12 @@ function Loren:SetOnFire()
 				end
 
 				if s.Signals then
+					local signalObjects = {}
 					for sigIdx, sigName in ipairs(s.Signals) do
 						SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
-						s[sigName] = Signal.new(sIdx, sigIdx)
+						signalObjects[sigName] = Signal.new(sIdx, sigIdx)
 					end
+					s.Signals = signalObjects
 				end
 			end
 			Handshake.OnServerInvoke = function()

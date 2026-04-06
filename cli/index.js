@@ -6,7 +6,7 @@ const degit = require('degit');
 const { execSync } = require('child_process');
 
 program
-  .version('1.2.2')
+  .version('1.2.3')
   .description('Loren-Framework - Burning like a beating heart.');
 
 const hasRojo = (cwd = process.cwd()) => {
@@ -104,7 +104,7 @@ program
 
 program
   .command('make <type> <name>')
-  .description('Create a new service or controller with Loren v1.2.2 boilerplate')
+  .description('Create a new service or controller with Loren v1.2.3 boilerplate')
   .action((type, name) => {
     const root = process.cwd();
     if (!fs.existsSync(path.join(root, 'default.project.json'))) {

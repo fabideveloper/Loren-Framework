@@ -49,7 +49,7 @@ end
 
 function Service:LorenBurn()
     -- Fire a signal to everyone
-    self.SendData:FireAll(self.someData)
+    self.Signals.SendData:FireAll(self.someData)
 end
 
 -- a Simple Controller
@@ -71,7 +71,7 @@ function Controller:LorenBurn()
     end):catch(warn)
 
     -- Connecting to a Signal
-    PointsService.SendData:Connect(function(data)
+    PointsService.Signals.SendData:Connect(function(data)
         print("Received Signal Data:", data)
     end)
 end

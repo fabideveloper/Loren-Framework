@@ -150,59 +150,59 @@ local function GetSuggestion(name: string): (string, string)
 end
 
 local function CreateServiceProxy(serviceName: string)
-	local sId = ServiceToId[serviceName]
-
-	local signalsProxy = setmetatable({}, {
-		__index = function(_, sigKey: string): any
-			if SignalToId[sId] and SignalToId[sId][sigKey] then
-				local sigId = SignalToId[sId][sigKey]
-				if not ClientSignals[sId] then
-					ClientSignals[sId] = {}
-				end
-				if not ClientSignals[sId][sigId] then
-					ClientSignals[sId][sigId] = Signal.new(sId, sigId)
-				end
-				return ClientSignals[sId][sigId]
-			end
+    local sId = ServiceToId[serviceName]
+    
+    local signalsProxy = setmetatable({}, {
+        __index = function(_, sigKey: string) : any
+            if SignalToId[sId] and SignalToId[sId][sigKey] then
+                local sigId = SignalToId[sId][sigKey]
+                if not ClientSignals[sId] then
+                    ClientSignals[sId] = {}
+                end
+                if not ClientSignals[sId][sigId] then
+                    ClientSignals[sId][sigId] = Signal.new(sId, sigId)
+                end
+                return ClientSignals[sId][sigId]
+            end
 			return nil
-		end,
-	})
+        end
+    })
 
-	return setmetatable({}, {
-		__index = function(_, key: string): any
-			if key == "Signals" then
-				return signalsProxy
-			end
+    return setmetatable({}, {
+        __index = function(_, key: string): any
+            if key == "Signals" then
+                return signalsProxy
+            end
 
-			return function(_, ...)
-				local args, argCount = { ... }, select("#", ...)
-				return Promise.new(function(resolve, reject, onCancel)
-					RequestId = (RequestId % 65535) + 1
-					local curId, mId = RequestId, (MethodToId[sId] and MethodToId[sId][key])
-					if not sId or not mId then
-						return reject("(LORENঌ) Missing Method: " .. key)
-					end
+            return function(_, ...)
+                local args, argCount = { ... }, select("#", ...)
+                return Promise.new(function(resolve, reject, onCancel)
+                    RequestId = (RequestId % 65535) + 1
+                    local curId, mId = RequestId, (MethodToId[sId] and MethodToId[sId][key])
+                    if not sId or not mId then
+                        return reject("(LORENঌ) Missing Method: " .. key)
+                    end
 
-					local header = PackHeader(curId, sId, mId, argCount)
-					PendingRequests[curId] = { resolve = resolve, reject = reject }
-					local timeoutThread = task.delay(10, function()
-						if PendingRequests[curId] then
-							PendingRequests[curId].reject("(LORENঌ) Timeout")
-							PendingRequests[curId] = nil
-						end
-					end)
-					onCancel(function()
-						if PendingRequests[curId] then
-							PendingRequests[curId] = nil
-						end
-						task.cancel(timeoutThread)
-					end)
-					Bridge:FireServer(header, table.unpack(args))
-					ReleaseBuffer(header)
-				end)
-			end
-		end,
-	})
+                    local header = PackHeader(curId, sId, mId, argCount)
+                    PendingRequests[curId] = { resolve = resolve, reject = reject }
+                    local timeoutThread = task.delay(10, function()
+                        if PendingRequests[curId] then
+                            PendingRequests[curId].reject("(LORENঌ) Timeout")
+                            PendingRequests[curId] = nil
+                        end
+                    end)
+                    onCancel(function()
+                        if PendingRequests[curId] then
+                            PendingRequests[curId] = nil
+                        end
+                        task.cancel(timeoutThread)
+                    end)
+                    Bridge:FireServer(header, table.unpack(args))
+                    ReleaseBuffer(header)
+                end)
+            end
+        end,
+    })
 end
 
 local function GetModule(name: string, requester: string)
@@ -292,13 +292,13 @@ function Loren:SetOnFire()
 				end
 
 				if s.Signals then
-					local signalObjects = {}
-					for sigIdx, sigName in ipairs(s.Signals) do
-						SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
-						signalObjects[sigName] = Signal.new(sIdx, sigIdx)
-					end
-					s.Signals = signalObjects
-				end
+                    local signalObjects = {}
+                    for sigIdx, sigName in ipairs(s.Signals) do
+                        SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
+                        signalObjects[sigName] = Signal.new(sIdx, sigIdx)
+                    end
+                    s.Signals = signalObjects
+                end
 			end
 			Handshake.OnServerInvoke = function()
 				return ServiceToId, IdToService, MethodToId, IdToMethod, SignalToId, IdToSignal
@@ -343,9 +343,9 @@ function Loren:SetOnFire()
 					return
 				end
 				local reqId, sId, mId, pCount = UnpackHeader(header)
-				if select("#", ...) ~= pCount or pCount > MAX_ARGUMENTS then
-					return
-				end
+				if pCount > MAX_ARGUMENTS then
+                    return
+                end
 
 				local sName = IdToService[sId]
 				local mName = sName and IdToMethod[sId] and IdToMethod[sId][mId]
@@ -361,26 +361,26 @@ function Loren:SetOnFire()
 						return Bridge:FireClient(player, reqId, err or "Denied", false)
 					end
 				end
-
+				
 				local success, res = pcall(s.Client[mName], s.Client, player, table.unpack(args, 1, pCount))
-				local clientRes = success and res or "Internal Server Error"
-				Bridge:FireClient(player, reqId, clientRes, success)
+				Bridge:FireClient(player, reqId, res, success)
 			end)
 			Players.PlayerRemoving:Connect(function(p)
 				CallTracker[p] = nil
 			end)
 		else
-			Bridge.OnClientEvent:Connect(function(hid, res, success, ...)
+			Bridge.OnClientEvent:Connect(function(hid, ...)
 				if typeof(hid) == "buffer" then
 					local _, sId, sigId = UnpackHeader(hid)
-					if ClientSignals[sId] and ClientSignals[sId][sigId] then
-						ClientSignals[sId][sigId]:_Execute(res, ...)
-					end
+                    if ClientSignals[sId] and ClientSignals[sId][sigId] then
+                        ClientSignals[sId][sigId]:_Execute(...)
+                    end
 				elseif PendingRequests[hid] then
-					if success == false then
-						PendingRequests[hid].reject(res)
+					local _res, _success = ...
+					if _success == false then
+						PendingRequests[hid].reject(_res)
 					else
-						PendingRequests[hid].resolve(res)
+						PendingRequests[hid].resolve(_res)
 					end
 					PendingRequests[hid] = nil
 				end

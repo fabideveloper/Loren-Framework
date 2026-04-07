@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.2.3)
+# LOREN-FRAMEWORK (v1.2.4)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -11,7 +11,7 @@ Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathin
 | :--- | :--- |
 | `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
 | `loren add <user/repo>` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
-| `loren make <type> <name>` | Forges a new service or controller with full v1.2.3 boilerplate. |
+| `loren make <type> <name>` | Forges a new service or controller with full v1.2.4 boilerplate. |
 | `loren inject <type> <name>` | Injects a pre-built module from your loren_premade folder into your active source code. |
 | `loren refresh` | Manually refresh the Rojo sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |
 | `loren ignite` | Calls `rojo serve` automatically |
@@ -95,6 +95,8 @@ Loren:SetOnFire()
 -> Note on v1.2.2: Added `loren refresh` and remove .import from Loren
 
 -> Note on v1.2.3: All signals are now nested inside the "Signals" Table for services and controllers
+
+-> Note on v1.2.4: Fixed fatal bug where signals could only transfer 1 argument a time.
 
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

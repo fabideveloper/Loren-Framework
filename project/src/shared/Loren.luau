@@ -43,7 +43,7 @@ local MethodToId, IdToMethod = {}, {}
 local SignalToId, IdToSignal = {}, {}
 
 local ClientSignals, PendingRequests = {}, {}
-local RequestId, Pool, PoolSize = 0, {}, 0
+local RequestId = 0
 
 local RATE_LIMIT = 50
 local MAX_ARGUMENTS = 20
@@ -53,23 +53,9 @@ local Services: { [string]: any } = {}
 local Controllers: { [string]: any } = {}
 
 -- [[ Internal Helpers ]]
-local function GetBuffer(): buffer
-	if PoolSize > 0 then
-		local b = Pool[PoolSize]
-		Pool[PoolSize] = nil
-		PoolSize -= 1
-		return b
-	end
-	return buffer.create(5)
-end
-
-local function ReleaseBuffer(b: buffer)
-	PoolSize += 1
-	Pool[PoolSize] = b
-end
 
 local function PackHeader(reqId: number, sId: number, mId: number, pCount: number): buffer
-	local b = GetBuffer()
+	local b = buffer.create(5)
 	buffer.writeu16(b, 0, reqId)
 	buffer.writeu8(b, 2, sId)
 	buffer.writeu8(b, 3, mId)
@@ -92,13 +78,11 @@ end
 function Signal:Fire(player: Player, ...)
 	local header = PackHeader(0, self._sId, self._sigId, select("#", ...))
 	Bridge:FireClient(player, header, ...)
-	ReleaseBuffer(header)
 end
 
 function Signal:FireAll(...)
 	local header = PackHeader(0, self._sId, self._sigId, select("#", ...))
 	Bridge:FireAllClients(header, ...)
-	ReleaseBuffer(header)
 end
 
 function Signal:Connect(callback: (...any) -> ())
@@ -113,8 +97,21 @@ function Signal:Connect(callback: (...any) -> ())
 	}
 end
 
+function Signal:Once(callback: (...any) -> ())
+	local connection
+
+	connection = self:Connect(function(...)
+		if connection then
+			connection.Disconnect()
+		end
+		callback(...)
+	end)
+
+	return connection
+end
+
 function Signal:_Execute(...)
-	for _, callback in self._listeners do
+	for _, callback: any in table.clone(self._listeners) do
 		task.spawn(callback, ...)
 	end
 end
@@ -150,59 +147,65 @@ local function GetSuggestion(name: string): (string, string)
 end
 
 local function CreateServiceProxy(serviceName: string)
-    local sId = ServiceToId[serviceName]
-    
-    local signalsProxy = setmetatable({}, {
-        __index = function(_, sigKey: string) : any
-            if SignalToId[sId] and SignalToId[sId][sigKey] then
-                local sigId = SignalToId[sId][sigKey]
-                if not ClientSignals[sId] then
-                    ClientSignals[sId] = {}
-                end
-                if not ClientSignals[sId][sigId] then
-                    ClientSignals[sId][sigId] = Signal.new(sId, sigId)
-                end
-                return ClientSignals[sId][sigId]
-            end
+	local sId = ServiceToId[serviceName]
+
+	local signalsProxy = setmetatable({}, {
+		__index = function(_, sigKey: string): any
+			if SignalToId[sId] and SignalToId[sId][sigKey] then
+				local sigId = SignalToId[sId][sigKey]
+				if not ClientSignals[sId] then
+					ClientSignals[sId] = {}
+				end
+				if not ClientSignals[sId][sigId] then
+					ClientSignals[sId][sigId] = Signal.new(sId, sigId)
+				end
+				return ClientSignals[sId][sigId]
+			end
 			return nil
-        end
-    })
+		end,
+	})
 
-    return setmetatable({}, {
-        __index = function(_, key: string): any
-            if key == "Signals" then
-                return signalsProxy
-            end
+	return setmetatable({}, {
+		__index = function(_, key: string): any
+			if key == "Signals" then
+				return signalsProxy
+			end
 
-            return function(_, ...)
-                local args, argCount = { ... }, select("#", ...)
-                return Promise.new(function(resolve, reject, onCancel)
-                    RequestId = (RequestId % 65535) + 1
-                    local curId, mId = RequestId, (MethodToId[sId] and MethodToId[sId][key])
-                    if not sId or not mId then
-                        return reject("(LORENঌ) Missing Method: " .. key)
-                    end
+			return function(_, ...)
+				local args, argCount = { ... }, select("#", ...)
+				return Promise.new(function(resolve, reject, onCancel)
+					RequestId = (RequestId % 65535) + 1
+					local curId, mId = RequestId, (MethodToId[sId] and MethodToId[sId][key])
+					if not sId or not mId then
+						return reject("(LORENঌ) Missing Method: " .. key)
+					end
 
-                    local header = PackHeader(curId, sId, mId, argCount)
-                    PendingRequests[curId] = { resolve = resolve, reject = reject }
-                    local timeoutThread = task.delay(10, function()
-                        if PendingRequests[curId] then
-                            PendingRequests[curId].reject("(LORENঌ) Timeout")
-                            PendingRequests[curId] = nil
-                        end
-                    end)
-                    onCancel(function()
-                        if PendingRequests[curId] then
-                            PendingRequests[curId] = nil
-                        end
-                        task.cancel(timeoutThread)
-                    end)
-                    Bridge:FireServer(header, table.unpack(args))
-                    ReleaseBuffer(header)
-                end)
-            end
-        end,
-    })
+					local header = PackHeader(curId, sId, mId, argCount)
+					local timeoutThread = task.delay(10, function()
+						local request = PendingRequests[curId]
+						if request then
+							PendingRequests[curId] = nil
+
+							request.reject("(LORENঌ) Timeout")
+						end
+					end)
+					PendingRequests[curId] = {
+						resolve = resolve,
+						reject = reject,
+						timeout = timeoutThread,
+					}
+					onCancel(function()
+						if PendingRequests[curId] then
+							task.cancel(PendingRequests[curId].timeout)
+							PendingRequests[curId] = nil
+						end
+					end)
+					print("Client Outbox:", curId)
+					Bridge:FireServer(header, table.unpack(args))
+				end)
+			end
+		end,
+	})
 end
 
 local function GetModule(name: string, requester: string)
@@ -292,13 +295,13 @@ function Loren:SetOnFire()
 				end
 
 				if s.Signals then
-                    local signalObjects = {}
-                    for sigIdx, sigName in ipairs(s.Signals) do
-                        SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
-                        signalObjects[sigName] = Signal.new(sIdx, sigIdx)
-                    end
-                    s.Signals = signalObjects
-                end
+					local signalObjects = {}
+					for sigIdx, sigName in ipairs(s.Signals) do
+						SignalToId[sIdx][sigName], IdToSignal[sIdx][sigIdx] = sigIdx, sigName
+						signalObjects[sigName] = Signal.new(sIdx, sigIdx)
+					end
+					s.Signals = signalObjects
+				end
 			end
 			Handshake.OnServerInvoke = function()
 				return ServiceToId, IdToService, MethodToId, IdToMethod, SignalToId, IdToSignal
@@ -336,6 +339,10 @@ function Loren:SetOnFire()
 				tracker.Count += 1
 				CallTracker[player] = tracker
 				if tracker.Count > RATE_LIMIT then
+					if player and typeof(player) == "Instance" then
+						warn("(LORENঌ) Rate limit reached from calls from " .. player.Name)
+					end
+
 					return
 				end
 
@@ -343,9 +350,10 @@ function Loren:SetOnFire()
 					return
 				end
 				local reqId, sId, mId, pCount = UnpackHeader(header)
+				print("Server Inbox:", reqId)
 				if pCount > MAX_ARGUMENTS then
-                    return
-                end
+					return
+				end
 
 				local sName = IdToService[sId]
 				local mName = sName and IdToMethod[sId] and IdToMethod[sId][mId]
@@ -358,12 +366,23 @@ function Loren:SetOnFire()
 				if s.Middleware and s.Middleware[mName] then
 					local ok, err = s.Middleware[mName](player, table.unpack(args, 1, pCount))
 					if not ok then
-						return Bridge:FireClient(player, reqId, err or "Denied", false)
+						return Bridge:FireClient(player, reqId, false, err or "Denied")
 					end
 				end
-				
-				local success, res = pcall(s.Client[mName], s.Client, player, table.unpack(args, 1, pCount))
-				Bridge:FireClient(player, reqId, res, success)
+
+				local function packResults(...)
+					return select("#", ...), { ... }
+				end
+
+				local count, results =
+					packResults(pcall(s.Client[mName], s.Client, player, table.unpack(args, 1, pCount)))
+				local success = results[1]
+
+				local responseArgs = {}
+				for i = 2, count do
+					responseArgs[i - 1] = results[i]
+				end
+				Bridge:FireClient(player, reqId, success, table.unpack(responseArgs, 1, count - 1))
 			end)
 			Players.PlayerRemoving:Connect(function(p)
 				CallTracker[p] = nil
@@ -372,17 +391,24 @@ function Loren:SetOnFire()
 			Bridge.OnClientEvent:Connect(function(hid, ...)
 				if typeof(hid) == "buffer" then
 					local _, sId, sigId = UnpackHeader(hid)
-                    if ClientSignals[sId] and ClientSignals[sId][sigId] then
-                        ClientSignals[sId][sigId]:_Execute(...)
-                    end
-				elseif PendingRequests[hid] then
-					local _res, _success = ...
-					if _success == false then
-						PendingRequests[hid].reject(_res)
-					else
-						PendingRequests[hid].resolve(_res)
+					if ClientSignals[sId] and ClientSignals[sId][sigId] then
+						ClientSignals[sId][sigId]:_Execute(...)
 					end
+				elseif PendingRequests[hid] then
+					local request = PendingRequests[hid]
 					PendingRequests[hid] = nil
+
+					if request.timeout then
+						task.cancel(request.timeout)
+					end
+
+					local success = select(1, ...)
+
+					if success == false then
+						request.reject(select(2, ...))
+					else
+						request.resolve(select(2, ...))
+					end
 				end
 			end)
 		end

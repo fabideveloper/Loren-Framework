@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.2.4)
+# LOREN-FRAMEWORK (v1.3.0)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -97,6 +97,8 @@ Loren:SetOnFire()
 -> Note on v1.2.3: All signals are now nested inside the "Signals" Table for services and controllers
 
 -> Note on v1.2.4: Fixed fatal bug where signals could only transfer 1 argument a time.
+
+-> Note on v1.3.0: Added :Once to signals, improved the buffer pool q (removed old caching), added client call timeout warn and improved security. *fixed bugs : promises could only transfer 1 argument at a time.
 
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

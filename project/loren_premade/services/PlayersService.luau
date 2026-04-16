@@ -5,13 +5,11 @@ local Players = game:GetService("Players")
 local Loren = require(ReplicatedStorage.Shared.Loren)
 
 -- Modules
-local Promise = Loren.import("Promise")
+local Promise = require(ReplicatedStorage.Shared.Promise)
 -- Profile Service
-local ProfileService = Loren.import("ProfileService")
+local ProfileService = require(ReplicatedStorage.Shared.PlayersService)
 
-local ProfileService_Template = {
-
-}
+local ProfileService_Template = {}
 
 local PlayerData = ProfileService.GetProfileStore("PlayerDataV0x0000" :: any, ProfileService_Template)
 local Profiles = {}
@@ -71,45 +69,45 @@ local function PlayerRemoving(Player: Player, ExitReason: Enum.PlayerExitReason)
 end
 
 function PlayersService:OverwriteData(Player: Player, Path: string, Data: any, ReturnPromise: boolean?)
-    local function PerformUpdate()
-        assert(
-            typeof(Player) == "Instance" and Player:IsDescendantOf(Players),
-            "PlayersService.OverwriteData — invalid player"
-        )
-        
-        local profile = Profiles[Player]
-        if not profile then
-            error(`PlayersService.OverwriteData — profile not found for {Player.Name}`)
-        end
+	local function PerformUpdate()
+		assert(
+			typeof(Player) == "Instance" and Player:IsDescendantOf(Players),
+			"PlayersService.OverwriteData — invalid player"
+		)
 
-        local keys = string.split(Path, ".")
-        local current = profile.Data
+		local profile = Profiles[Player]
+		if not profile then
+			error(`PlayersService.OverwriteData — profile not found for {Player.Name}`)
+		end
 
-        for i = 1, #keys - 1 do
-            local key = keys[i]
-            if typeof(current[key]) ~= "table" then
-                error(`PlayersService.OverwriteData — Invalid path segment: {key} is not a table`)
-            end
-            current = current[key]
-        end
+		local keys = string.split(Path, ".")
+		local current = profile.Data
 
-        local finalKey = keys[#keys]
-        current[finalKey] = Data
-        return true
-    end
+		for i = 1, #keys - 1 do
+			local key = keys[i]
+			if typeof(current[key]) ~= "table" then
+				error(`PlayersService.OverwriteData — Invalid path segment: {key} is not a table`)
+			end
+			current = current[key]
+		end
 
-    if ReturnPromise then
-        return Promise.new(function(resolve, reject)
-            local success, result = pcall(PerformUpdate)
-            if success then
-                resolve(result)
-            else
-                reject(result)
-            end
-        end)
-    end
+		local finalKey = keys[#keys]
+		current[finalKey] = Data
+		return true
+	end
 
-    return PerformUpdate()
+	if ReturnPromise then
+		return Promise.new(function(resolve, reject)
+			local success, result = pcall(PerformUpdate)
+			if success then
+				resolve(result)
+			else
+				reject(result)
+			end
+		end)
+	end
+
+	return PerformUpdate()
 end
 
 function PlayersService:RequestData(Player: Player, Path: string): any | nil

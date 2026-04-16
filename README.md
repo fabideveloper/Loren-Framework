@@ -1,4 +1,4 @@
-# LOREN-FRAMEWORK (v1.3.0)
+# LOREN-FRAMEWORK (v1.4.0)
 > "Burning like a beating heart."
 
 Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
@@ -13,8 +13,10 @@ Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathin
 | `loren add <user/repo>` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
 | `loren make <type> <name>` | Forges a new service or controller with full v1.2.4 boilerplate. |
 | `loren inject <type> <name>` | Injects a pre-built module from your loren_premade folder into your active source code. |
-| `loren refresh` | Manually refresh the Rojo sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |
-| `loren ignite` | Calls `rojo serve` automatically |
+| `loren refresh` | Manually refresh the Rojo / Argon sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |
+| `loren ignite` | Calls `rojo serve` / `argon serve` automatically |
+| `loren migrate` | Migrate the current project between Rojo and Argon |
+
 
 ---
 
@@ -99,6 +101,8 @@ Loren:SetOnFire()
 -> Note on v1.2.4: Fixed fatal bug where signals could only transfer 1 argument a time.
 
 -> Note on v1.3.0: Added :Once to signals, improved the buffer pool q (removed old caching), added client call timeout warn and improved security. *fixed bugs : promises could only transfer 1 argument at a time.
+
+->Note on v1.4.0: Fixed old premade PlayersService, added support for argon and a command to migrate from argon to rojo and viceversa. update the init command.
 
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

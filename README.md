@@ -20,7 +20,7 @@ npm install -g loren-framework
 | Command | Description |
 | :--- | :--- |
 | `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
-| `loren add <user/repo>` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
+| `loren add <user/repo> [custom name]` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
 | `loren make <type> <name>` | Forges a new service or controller with full [![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework) boilerplate. |
 | `loren inject <type> <name>` | Injects a pre-built module from your loren_premade folder into your active source code. |
 | `loren refresh` | Manually refresh the Rojo / Argon sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |

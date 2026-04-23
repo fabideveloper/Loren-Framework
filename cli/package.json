@@ -1,6 +1,9 @@
 {
   "name": "loren-framework",
-  "version": "1.0.0",
+  "version": "1.4.2",
+  "scripts": {
+    "prepublishOnly": "node -e \"require('fs').copyFileSync('../README.md', 'README.md')\""
+  },
   "main": "index.js",
   "bin": {
     "loren": "./index.js"
@@ -8,6 +11,7 @@
   "dependencies": {
     "commander": "^11.0.0",
     "degit": "^2.8.4",
-    "fs-extra": "^11.1.0"
+    "fs-extra": "^11.1.0",
+    "update-notifier": "^7.3.1"
   }
 }

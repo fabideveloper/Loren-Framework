@@ -6,8 +6,24 @@ const degit = require('degit');
 const { execSync } = require('child_process');
 const readline = require('readline');
 
+const packageInfo = require('./package.json');
+
+const notifierLib = require('update-notifier');
+const updateNotifier = notifierLib.default || notifierLib;
+
+const notifier = updateNotifier({ 
+  pkg: packageInfo,
+  //updateCheckInterval: 0 
+});
+
+if (notifier.update && notifier.update.latest !== packageInfo.version) {
+  process.on('exit', () => {
+    console.log(`\n(LORENঌ) A new version is available! (${notifier.update.latest}). To update, run: \x1b[33mnpm i -g loren-framework\x1b[0m\n`);
+  });
+}
+
 program
-  .version('1.4.0')
+  .version(packageInfo.version)
   .description('Loren-Framework - Burning like a beating heart.');
 
 const hasCommand = (cmd, cwd = process.cwd()) => {
@@ -29,7 +45,6 @@ const getProjectTool = (cwd = process.cwd()) => {
   return hasCommand('argon', cwd) ? 'argon' : 'rojo'; 
 };
 
-// Wraps sourcemap generation based on the active tool
 const generateSourcemap = (cwd, tool = getProjectTool(cwd)) => {
   if (!hasCommand(tool, cwd)) return;
   try {
@@ -43,7 +58,6 @@ const generateSourcemap = (cwd, tool = getProjectTool(cwd)) => {
   }
 };
 
-// Interactive prompt for init
 const askSyncTool = () => {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -70,7 +84,7 @@ program
   .description('Initialize a new Loren-Framework project')
   .action(async (name) => {
     const targetDir = path.join(process.cwd(), name);
-    const templateDir = path.join(__dirname, '../project'); 
+    const templateDir = path.join(__dirname, 'project'); 
 
     if (fs.existsSync(targetDir)) {
       return console.error(`(LORENঌ) Error: Folder "${name}" already exists.`);
@@ -87,7 +101,6 @@ program
 
       const aftmanPath = path.join(targetDir, 'aftman.toml');
 
-      // Inject the selected sync tool into aftman.toml
       if (!fs.existsSync(aftmanPath)) {
         console.log(`(LORENঌ) Creating new aftman.toml...`);
         fs.writeFileSync(aftmanPath, `[tools]\n${toolString}`);

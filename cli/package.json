@@ -1,6 +1,7 @@
 {
   "name": "loren-framework",
-  "version": "1.4.2",
+  "version": "1.5.0",
+  "license": "MIT",
   "scripts": {
     "prepublishOnly": "node -e \"require('fs').copyFileSync('../README.md', 'README.md')\""
   },

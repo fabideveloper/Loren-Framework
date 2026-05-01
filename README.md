@@ -116,5 +116,7 @@ Loren:SetOnFire()
 
 ->Note on v1.4.2: Published the framework to `npm` and updated the structure.
 
+->Note on v1.5.0: Added Documentation
+
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

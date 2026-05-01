@@ -30,6 +30,12 @@ local Players = game:GetService("Players")
 
 local Promise = require(ReplicatedStorage.LorenPackages.Promise)
 
+--[=[
+    @class Loren
+    
+    The core runtime module for the Loren Framework. 
+    Use this to initialize your Services and Controllers.
+]=]
 local Loren = {}
 Loren.IsServer = RunService:IsServer()
 Loren.IsClient = RunService:IsClient()
@@ -67,7 +73,12 @@ local function UnpackHeader(b: buffer)
 	return buffer.readu16(b, 0), buffer.readu8(b, 2), buffer.readu8(b, 3), buffer.readu8(b, 4)
 end
 
--- [[ Signal Class ]]
+--[=[
+    @class Signal
+    
+    A network-optimized signal for cross-boundary communication.
+    Automatically handles packing and unpacking arguments over the binary bridge.
+]=]
 local Signal = {}
 Signal.__index = Signal
 
@@ -228,10 +239,12 @@ end
 
 -- [[ Public API ]]
 
---[[
-	@ Client
-	Adds a list of ModuleScripts (or an instance containing module scripts as children) to the controllers registry
-]]
+--[=[
+    Adds a folder or list of ModuleScripts to the client-side registry.
+    
+    @client
+    @param container Instance | {Instance} -- A folder or array containing Controller ModuleScripts.
+]=]
 function Loren.AddControllers(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsClient then
 		return
@@ -242,10 +255,12 @@ function Loren.AddControllers(container: Instance | { Instance })
 		end
 	end
 end
---[[
-	@ Server
-	Adds a list of ModuleScripts (or an instance containing module scripts as children) to the services registry
-]]
+--[=[
+    Adds a folder or list of ModuleScripts to the server-side registry.
+    
+    @server
+    @param container Instance | {Instance} -- A folder or array containing Service ModuleScripts.
+]=]
 function Loren.AddServices(container: Instance | { Instance })
 	if Loren.IsOnFire or not Loren.IsServer then
 		return
@@ -257,12 +272,12 @@ function Loren.AddServices(container: Instance | { Instance })
 	end
 end
 
---[[ 
-	@ Server
-	@ Client
-	Runs LorenIgnite (Init) and LorenBurn (Start) on all Services/Controllers added to the registry
-	Boots the Bridges and Handshakes between modules
-]]
+--[=[
+    Bootstraps the framework. Runs `LorenIgnite()` and `LorenBurn()` on all registered modules.
+    Boots the internal binary bridges and handshakes between the client and server.
+    
+    @return Promise -- Resolves when the framework is successfully burning.
+]=]
 function Loren:SetOnFire()
 	return Promise.new(function(resolve, reject)
 		if self.IsOnFire then

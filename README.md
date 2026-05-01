@@ -1,4 +1,8 @@
 # LOREN-FRAMEWORK
+<p align="center">
+  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/refs/heads/main/assets/logo.png" width="300" alt="Loren Framework Logo">
+</p>
+
 [![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework)
 > "Burning like a beating heart."
 

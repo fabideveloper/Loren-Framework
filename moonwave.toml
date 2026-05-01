@@ -1,6 +1,7 @@
 [project]
 name = "Loren Framework"
 repository = "https://github.com/fabideveloper/Loren-Framework"
+baseUrl = "/Loren-Framework/"
 
 [docusaurus]
 tagline = "Burning like a beating heart."

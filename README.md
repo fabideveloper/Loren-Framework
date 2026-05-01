@@ -1,6 +1,6 @@
 # LOREN-FRAMEWORK
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/refs/heads/main/assets/logo.png" width="600" alt="Loren Framework Logo">
+  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/refs/heads/main/assets/logo.png" width="250" alt="Loren Framework Logo">
 </p>
 
 <p align="center">

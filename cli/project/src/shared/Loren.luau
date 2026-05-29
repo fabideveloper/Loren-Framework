@@ -211,7 +211,7 @@ local function CreateServiceProxy(serviceName: string)
 							PendingRequests[curId] = nil
 						end
 					end)
-					print("Client Outbox:", curId)
+					--print("Client Outbox:", curId)
 					Bridge:FireServer(header, table.unpack(args))
 				end)
 			end
@@ -365,7 +365,7 @@ function Loren:SetOnFire()
 					return
 				end
 				local reqId, sId, mId, pCount = UnpackHeader(header)
-				print("Server Inbox:", reqId)
+				--print("Server Inbox:", reqId)
 				if pCount > MAX_ARGUMENTS then
 					return
 				end

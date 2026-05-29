@@ -57,4 +57,8 @@ end
 
 If a Middleware function returns `false` along with a string message (e.g., `return false, "Denied"`), Loren will automatically route that message back to the client and reject the Controller's Promise with that exact string, allowing for clean UI error handling.
 
-Furthermore, Loren natively enforces a global limit of 50 requests per second per player. Exceeding this limit drops all subsequent packets at the buffer level, ensuring your server's processing threads are never overwhelmed.
+Furthermore, Loren natively enforces a global limit of **50 requests per second per player**. Once a player exceeds the limit within a one-second window, every further request that second is dropped before it reaches your logic (the server logs a single warning), ensuring your processing threads are never overwhelmed.
+
+:::info Argument cap
+The bridge also drops any request carrying more than **20 arguments** (`MAX_ARGUMENTS`). See [Limits & Constraints](../advanced/limits.md) for the full list of hard limits.
+:::

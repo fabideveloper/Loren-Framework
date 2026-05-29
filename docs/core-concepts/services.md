@@ -15,7 +15,11 @@ A standard Service requires, at minimum, a table to hold its structure. The CLI 
 ```lua
 local PlayerDataService = {
     Dependencies = {},
+
+    -- Signals are declared as an array of names (strings).
+    -- Loren swaps this array for ready-to-fire Signal objects on ignition.
     Signals = {},
+
     Client = {},
     Middleware = {}
 }
@@ -60,15 +64,25 @@ Notice the use of `self.Server` in the example above. Methods executed within th
 
 ## Firing Signals
 
-Signals declared in the `Signals` table are automatically initialized by the framework. They provide a highly optimized alternative to standard `RemoteEvents`.
+Signals provide a highly optimized alternative to standard `RemoteEvents`. First **declare the signal name** as a string in the `Signals` array. During ignition, Loren replaces that array with live `Signal` objects you can fire by name.
 ```lua
+local PlayerDataService = {
+    Signals = {"PointsUpdated"}, -- declare the name here
+}
+
 function PlayerDataService:AwardPoints(player, amount)
     -- Logic to award points...
-    
+
     -- Notify the specific player
     self.Signals.PointsUpdated:Fire(player, amount)
-    
+
     -- Or notify every connected client
     self.Signals.PointsUpdated:FireAll(amount)
 end
 ```
+
+:::info Server context
+The example above fires from a top-level Service method, so `self.Signals` is correct. Inside a `Client` method `self` is the `Client` table — reach signals through `self.Server.Signals` instead.
+:::
+
+See the [Signal API reference](../api-reference/signal.md) for every method (`Fire`, `FireAll`, `Connect`, `Once`).

@@ -118,5 +118,8 @@ Loren:SetOnFire()
 
 ->Note on v1.5.0: Added Documentation
 
+->Note on v1.5.1: Minor bug fix, updated docs
+
+
 ### Documentation
 Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.

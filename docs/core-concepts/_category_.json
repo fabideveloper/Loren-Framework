@@ -1,0 +1,9 @@
+{
+  "label": "Core Concepts",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "title": "Core Concepts",
+    "description": "The architectural pillars of Loren: Dependency Injection, Services, and Controllers."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "label": "Premades",
+  "position": 9,
+  "link": {
+    "type": "generated-index",
+    "title": "Premade Modules",
+    "description": "Ready-to-inject modules shipped with the CLI."
+  }
+}

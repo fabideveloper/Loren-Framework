@@ -382,7 +382,7 @@ program
 
     const aftmanPath = path.join(root, 'aftman.toml');
     const rojoString = 'rojo = "rojo-rbx/rojo@7.4.1"';
-    const argonString = 'argon = "argon-rbx/argon@2.0.6"';
+    const argonString = 'argon = "argon-rbx/argon@2.0.23"';
 
     if (fs.existsSync(aftmanPath)) {
       let content = fs.readFileSync(aftmanPath, 'utf8');

@@ -1,0 +1,116 @@
+{
+	"name": "LorenTestBaseline",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"LorenPackages": {
+				"$path": "../cli/project/loren_packages"
+			},
+			"Shared": {
+				"$className": "Folder",
+				"Loren": {
+					"$path": "baseline/Loren151.luau"
+				}
+			},
+			"TestConfig": {
+				"$className": "Configuration",
+				"$attributes": {
+					"Scenario": "check",
+					"Duration": 20,
+					"Rate": 30,
+					"PayloadSize": 64,
+					"Clients": 0
+				}
+			},
+			"LorenTest": {
+				"$className": "Folder",
+				"LorenTest": {
+					"$path": "runner/LorenTest.luau"
+				},
+				"Harness": {
+					"$path": "studio/Harness"
+				},
+				"Bots": {
+					"$path": "bots"
+				},
+				"Controllers": {
+					"$path": "fixtures/Controllers"
+				},
+				"V2Controllers": {
+					"$path": {
+						"optional": "fixtures/v2/Controllers"
+					}
+				},
+				"RawClient": {
+					"$path": "raw/RawClient.luau"
+				},
+				"Specs": {
+					"$className": "Folder",
+					"StudioClient": {
+						"$path": "specs/studio/client"
+					},
+					"V2Client": {
+						"$path": {
+							"optional": "specs/v2/client"
+						}
+					}
+				}
+			}
+		},
+		"ServerScriptService": {
+			"LorenTestServer": {
+				"$path": "studio/Server.server.luau"
+			}
+		},
+		"ServerStorage": {
+			"LorenTest": {
+				"$className": "Folder",
+				"Services": {
+					"$path": "fixtures/Services"
+				},
+				"V2Services": {
+					"$path": {
+						"optional": "fixtures/v2/Services"
+					}
+				},
+				"ServerHarness": {
+					"$path": "studio/ServerHarness"
+				},
+				"RawServer": {
+					"$path": "raw/RawServer.luau"
+				},
+				"Specs": {
+					"$className": "Folder",
+					"Runner": {
+						"$path": "specs/runner"
+					},
+					"StudioServer": {
+						"$path": "specs/studio/server"
+					},
+					"Unit": {
+						"$path": {
+							"optional": "specs/unit"
+						}
+					},
+					"V2Server": {
+						"$path": {
+							"optional": "specs/v2/server"
+						}
+					}
+				}
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"LorenTestClient": {
+					"$path": "studio/Client.client.luau"
+				}
+			}
+		},
+		"Players": {
+			"$properties": {
+				"CharacterAutoLoads": false
+			}
+		}
+	}
+}

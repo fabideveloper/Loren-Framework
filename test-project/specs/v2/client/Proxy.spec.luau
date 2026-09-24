@@ -1,0 +1,130 @@
+--!strict
+-- 2.0 service proxy: cached per service, frozen, unknown keys raise (with a suggestion), dot calls
+-- with arguments raise, the 1.5.1 no-argument dot call still works, and the Try form.
+local V2 = require(script.Parent._V2)
+
+return function(t: any)
+	local describe, it, expect = t.describe, t.it, t.expect
+
+	describe("v2 proxy lookup", function()
+		it("GetService returns the same proxy every time, and V2Controller got it too", function()
+			local Loren = V2.loren()
+			local P = V2.proxy()
+			expect(rawequal(Loren.GetService("V2Service"), P)).toBe(true)
+			expect(rawequal(Loren:GetService("V2Service"), P)).toBe(true)
+			expect(rawequal(V2.controller().Dependencies.V2Service, P)).toBe(true)
+		end)
+
+		it("GetService of an unknown name raises with a suggestion", function()
+			local Loren = V2.loren()
+			expect(function()
+				Loren.GetService("V2Servce")
+			end).toThrow("V2Service")
+		end)
+
+		it("is frozen", function()
+			local P = V2.proxy()
+			expect(table.isfrozen(P)).toBe(true)
+			expect(function()
+				P.Extra = true
+			end).toThrow()
+		end)
+	end)
+
+	describe("v2 unknown keys", function()
+		it("an unknown method raises and suggests the close name", function()
+			local P = V2.proxy()
+			expect(function()
+				return P.NoSuchMethod
+			end).toThrow("NoSuchMethod")
+			expect(function()
+				return P.Ech
+			end).toThrow("Echo")
+		end)
+
+		it("unknown Signals, ClientEvents and Try members raise", function()
+			local P = V2.proxy()
+			expect(function()
+				return P.Signals.NoSuchSignal
+			end).toThrow()
+			expect(function()
+				return P.ClientEvents.NoSuchEvent
+			end).toThrow()
+			expect(function()
+				return P.Try.NoSuchMethod
+			end).toThrow()
+		end)
+
+		it("a Method and a Signal share the name Echo", function()
+			local P = V2.proxy()
+			expect(typeof(P.Echo)).toBe("function")
+			expect(P.Signals.Echo).never.toBeNil()
+		end)
+	end)
+
+	describe("v2 call forms", function()
+		it("P:M(...) returns a Promise", function()
+			local P = V2.proxy()
+			local promise = P:Echo("colon")
+			expect(typeof(promise)).toBe("table")
+			expect(typeof(promise.andThen)).toBe("function")
+			local r = V2.settle(promise)
+			expect(r[1]).toBe(true)
+			expect(r[2]).toBe("colon")
+		end)
+
+		it("a dot call with arguments raises", function()
+			local P = V2.proxy()
+			expect(function()
+				P.Echo("dot")
+			end).toThrow()
+		end)
+
+		it("the 1.5.1 no-argument dot call P.M() still works", function()
+			local P = V2.proxy()
+			local r = V2.settle(P.Echo())
+			expect(r[1]).toBe(true)
+			expect(r.n).toBe(1)
+		end)
+	end)
+
+	describe("v2 Try", function()
+		it("returns (true, ...) with nil holes kept", function()
+			local P = V2.proxy()
+			local r = table.pack(P.Try:Echo(1, nil, 3))
+			expect(r.n).toBe(4)
+			expect(r[1]).toBe(true)
+			expect(r[2]).toBe(1)
+			expect(r[3]).toBeNil()
+			expect(r[4]).toBe(3)
+		end)
+
+		it("returns (false, message, info) for a Reject", function()
+			local P = V2.proxy()
+			local r = table.pack(P.Try:RejectMe("try", 7))
+			local message, info = V2.rejection(expect, r, "Rejected", "RejectMe")
+			expect(message).toBe("try")
+			expect(info.Data).toBe(7)
+		end)
+
+		it("returns (false, message, info) for a handler error", function()
+			local P = V2.proxy()
+			local r = table.pack(P.Try:Boom())
+			local _, info = V2.rejection(expect, r, "InternalError", "Boom")
+			expect(string.match(info.Incident, V2.HEX8)).never.toBeNil()
+		end)
+
+		it("returns (false, message, info) for a local rejection", function()
+			local P = V2.proxy()
+			local r = table.pack(P.Try:Echo(string.rep("x", 70000)))
+			V2.rejection(expect, r, "PayloadTooLarge", "Echo")
+		end)
+
+		it("a dot call with arguments raises", function()
+			local P = V2.proxy()
+			expect(function()
+				P.Try.Echo("dot")
+			end).toThrow()
+		end)
+	end)
+end

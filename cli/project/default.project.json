@@ -8,11 +8,17 @@
             },
             "LorenPackages": {
                 "$path": "loren_packages"
+            },
+            "LorenRuntime": {
+                "$path": "loren/shared"
             }
         },
         "ServerScriptService": {
             "Server": {
                 "$path": "src/server"
+            },
+            "LorenServer": {
+                "$path": "loren/server"
             }
         },
         "StarterPlayer": {

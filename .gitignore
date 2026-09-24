@@ -4,3 +4,5 @@ node_modules
 .cache-loader
 cli/node_modules
 .claude
+devforum-post.md
+design

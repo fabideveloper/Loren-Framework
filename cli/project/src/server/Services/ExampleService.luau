@@ -1,5 +1,9 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Types = require(ReplicatedStorage.Shared.LorenTypes)
+
 local ExampleService = {
-	Dependencies = {},
+	-- Names of other Services this one needs. Autocompletes from existing Services.
+	Dependencies = ({}) :: { Types.ServiceName },
 
 	-- Functions inside Client are exposed to the network
 	Client = {},
@@ -12,9 +16,13 @@ local ExampleService = {
 }
 
 -- Called when the framework initializes (Synchronous)
-function ExampleService:LorenIgnite() end
+function ExampleService:LorenIgnite()
+	-- Cast a resolved dependency for full intellisense on it, e.g.:
+	-- local Foo = self.Dependencies.Foo :: typeof(require(game:GetService("ServerScriptService").Server.Services.Foo))
+end
 
 -- Called after all modules are ignited (Asynchronous)
-function ExampleService:LorenBurn() end
+function ExampleService:LorenBurn()
+end
 
 return ExampleService

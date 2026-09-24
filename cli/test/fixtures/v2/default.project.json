@@ -1,0 +1,40 @@
+{
+	"name": "v2-game",
+	"servePort": 34872,
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"$className": "ReplicatedStorage",
+			"Shared": {
+				"$path": "src/shared"
+			},
+			"LorenPackages": {
+				"$path": "loren_packages"
+			},
+			"LorenRuntime": {
+				"$path": "loren/shared"
+			}
+		},
+		"ServerScriptService": {
+			"$className": "ServerScriptService",
+			"Server": {
+				"$path": "src/server"
+			},
+			"LorenServer": {
+				"$path": "loren/server"
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"Client": {
+					"$path": "src/client"
+				}
+			}
+		},
+		"Workspace": {
+			"$properties": {
+				"FilteringEnabled": true
+			}
+		}
+	}
+}

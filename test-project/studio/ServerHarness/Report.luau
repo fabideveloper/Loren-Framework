@@ -1,7 +1,7 @@
 --!strict
 --!optimize 2
 --[[
-	Report: formats the server REPORT (all prints start with "[LorenTest]" so the Sampler can
+	Report: formats the server REPORT (all prints start with "(LORENঌ - TEST)" so the Sampler can
 	exclude them from the server log counts).
 ]]
 
@@ -12,7 +12,7 @@ local Metrics = require(Harness:WaitForChild("Metrics"))
 
 local Report = {}
 
-local PREFIX = "[LorenTest] "
+local PREFIX = "(LORENঌ - TEST) "
 local num = Metrics.num
 local isTable = Metrics.isTable
 local asNumber = Metrics.asNumber

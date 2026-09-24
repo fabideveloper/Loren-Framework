@@ -58,9 +58,7 @@ local function getServer(peek: boolean?): any
 	if serverIndex ~= nil or peek then
 		return serverIndex
 	end
-	local ServerScriptService = game:GetService("ServerScriptService")
-	local inst = ServerScriptService:FindFirstChild(C.Names.ServerFolder)
-		or ServerScriptService:WaitForChild(C.Names.ServerFolder, 10)
+	local inst = Lifecycle.findServerFolder(true)
 	if inst == nil then
 		error(PREFIX .. "ServerScriptService.LorenServer missing: run loren update", 2)
 	end

@@ -15,7 +15,7 @@ Check, stress and security tests that run in real Roblox Studio (server + N clie
    - `Duration` (s), `Rate` (calls/s per client and Ticks/s), `PayloadSize` (bytes). For `soak`, use a long `Duration` (600+).
    - `Clients`: leave at `0` (auto: the test starts 3 s after the last client joins). Set a number only to wait for exactly that many.
 2. Press **Play** (one client), or use **Test > Clients and Servers** for several (`security` needs 2+). Run mode (F8) runs the server specs only.
-3. Read the REPORT in the **server** Output (entries start with `[LorenTest]`); it ends with `RESULT: PASS|WARN|FAIL` (also saved to `TestConfig.LastResult`). `compare` prints a `COMPARE_JSON` line to diff runtimes.
+3. Read the REPORT in the **server** Output (entries start with `(LORENঌ - TEST)`); it ends with `RESULT: PASS|WARN|FAIL` (also saved to `TestConfig.LastResult`). `compare` prints a `COMPARE_JSON` line to diff runtimes.
    During `check`, red and yellow lines in the Output are expected (specs trigger errors on purpose); only the CHECK REPORT and its `RESULT` decide pass or fail.
 
 The runtime is auto-detected: `LorenRuntime` = 2.0 (confirmed by `Loren.Version` once `Shared.Loren` loads), `LorenBridge`/`Shared.Loren` = 1.5.1, otherwise raw. Numbers are relative, since everything shares one machine.

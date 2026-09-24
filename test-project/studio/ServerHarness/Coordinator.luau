@@ -56,7 +56,7 @@ function Coordinator.init()
 			lastHello = os.clock()
 			print(
 				string.format(
-					"[LorenTest] client %s ready: %s, boot %s in %.0f ms%s",
+					"(LORENঌ - TEST) client %s ready: %s, boot %s in %.0f ms%s",
 					player.Name,
 					info.label,
 					if info.bootOk then "ok" else "FAILED",
@@ -65,7 +65,7 @@ function Coordinator.init()
 				)
 			)
 		elseif message.kind == "log" then
-			print("[LorenTest] [" .. player.Name .. "] " .. tostring(message.text))
+			print("(LORENঌ - TEST) [" .. player.Name .. "] " .. tostring(message.text))
 		else
 			local k = key(message.kind, message.runId)
 			local box = inbox[k]

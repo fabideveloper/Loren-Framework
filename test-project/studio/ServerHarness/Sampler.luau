@@ -5,9 +5,12 @@
 		local s = Sampler.start()   ...   local summary = s:stop()
 	Records Heartbeat frame time (dt), Stats.DataSendKbps/DataReceiveKbps every 0.5 s (KB/s approx,
 	total over all clients), memory every 2 s (Stats:GetTotalMemoryUsageMb, LuaHeap tag, gcinfo),
-	and Output lines (LogService.MessageOut) by type, excluding the harness's own "[LorenTest]" lines.
+	and Output lines (LogService.MessageOut) by type, excluding the harness's own "(LORENঌ - TEST)" lines.
 		Sampler.idle(seconds) -> { sendKbps, recvKbps }   baseline to subtract (no load running)
 ]]
+
+-- The harness prefix; its own lines are excluded from the server log counts.
+local HARNESS_TAG = "(LORENঌ - TEST)"
 
 local LogService = game:GetService("LogService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -95,7 +98,7 @@ function Sampler.start(): Sampler
 	table.insert(
 		self.connections,
 		LogService.MessageOut:Connect(function(message, messageType)
-			if string.sub(message, 1, 11) == "[LorenTest]" then
+			if string.sub(message, 1, #HARNESS_TAG) == HARNESS_TAG then
 				return
 			end
 			if messageType == Enum.MessageType.MessageWarning then

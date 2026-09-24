@@ -6,6 +6,8 @@ const { IDENTIFIER, LUAU_KEYWORDS, PROMISE_DIR } = require('./constants');
 const good = (value) => ({ ok: true, value });
 const bad = (reason) => ({ ok: false, reason });
 
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+
 // A Service, Controller, premade or package alias: it becomes an Instance name that code
 // reaches with `.Name`, and a file name. So: a Luau identifier, and no path tricks (dx-23).
 function validateIdentifier(name, what = 'Name') {
@@ -15,13 +17,12 @@ function validateIdentifier(name, what = 'Name') {
 		return bad(`${what} "${name}" is not a valid Luau identifier (letters, digits and _, not starting with a digit).`);
 	}
 	if (LUAU_KEYWORDS.has(name)) return bad(`${what} "${name}" is a Luau keyword.`);
+	if (WINDOWS_RESERVED.test(name)) return bad(`${what} "${name}" is a reserved file name on Windows.`);
 	if (name.length > 100) return bad(`${what} is longer than 100 characters.`);
 	return good(name);
 }
 
 const isPascalCase = (name) => /^[A-Z]/.test(name);
-
-const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
 // The folder `loren init <name>` creates. Friendlier than an identifier ("my-game" is fine),
 // but it must stay one folder inside the current directory.

@@ -166,7 +166,7 @@ end
 function Env.proxy(name: string): any
 	local proxy = Env.proxies[name]
 	if proxy == nil then
-		error("[LorenTest] no proxy for " .. name .. " (client not booted?)", 2)
+		error("(LORENঌ - TEST) no proxy for " .. name .. " (client not booted?)", 2)
 	end
 	return proxy
 end
@@ -174,7 +174,7 @@ end
 function Env.service(name: string): any
 	local service = Env.services[name]
 	if service == nil then
-		error("[LorenTest] no service module " .. name .. " (server not booted, or raw runtime)", 2)
+		error("(LORENঌ - TEST) no service module " .. name .. " (server not booted, or raw runtime)", 2)
 	end
 	return service
 end

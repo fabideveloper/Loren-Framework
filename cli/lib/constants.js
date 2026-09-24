@@ -35,6 +35,20 @@ const DEFAULT_PATHS = Object.freeze({
 	runtimeServer: 'loren/server',
 });
 
+// `--tool none`: Roblox Script Sync, built into Studio (lib/scriptsync.js). No project file:
+// .loren.json marks the project, and only Folders sync, so the runtime lives inside the synced
+// folders. Each directory is synced to the Studio Folder with the same path.
+const SCRIPT_SYNC = Object.freeze({ id: 'none', label: 'Roblox Script Sync', layout: 'scriptsync' });
+const LOREN_CONFIG_FILE = '.loren.json';
+const SCRIPT_SYNC_PATHS = Object.freeze({
+	shared: 'ReplicatedStorage/Shared',
+	server: 'ServerScriptService/Server',
+	client: 'StarterPlayer/StarterPlayerScripts/Client',
+	packages: 'ReplicatedStorage/LorenPackages',
+	runtimeShared: 'ReplicatedStorage/Shared/LorenRuntime',
+	runtimeServer: 'ServerScriptService/Server/LorenServer',
+});
+
 // Tool pins live here and nowhere else (dx-31).
 const TOOLS = Object.freeze({
 	rojo: Object.freeze({ id: 'rojo', label: 'Rojo', spec: 'rojo-rbx/rojo@7.5.1', repo: 'rojo-rbx/rojo' }),
@@ -48,12 +62,15 @@ const MANAGERS = Object.freeze(['rokit', 'aftman', 'foreman']);
 const MANAGER_FILES = Object.freeze({ rokit: 'rokit.toml', aftman: 'aftman.toml', foreman: 'foreman.toml' });
 
 // ReplicatedStorage.Shared.Loren: the old require path, kept as a shim over the managed runtime.
-// `loren init` and `loren update` must write exactly this text.
+// `loren init` and `loren update` must write exactly this text. It finds the runtime next to itself
+// first (Script Sync keeps it in ReplicatedStorage.Shared), else ReplicatedStorage.LorenRuntime.
+// Byte-identical to project/src/shared/Loren.luau and IMPLEMENTATION.md section 1 (a test checks).
 const SHIM_SOURCE = [
 	'--!strict',
 	'--!optimize 2',
-	'local rt = game:GetService("ReplicatedStorage"):WaitForChild("LorenRuntime", 30)',
-	'assert(rt, "[Loren] ReplicatedStorage.LorenRuntime missing: run loren update")',
+	'local rt = script.Parent:FindFirstChild("LorenRuntime")',
+	'\tor game:GetService("ReplicatedStorage"):WaitForChild("LorenRuntime", 30)',
+	'assert(rt, "[Loren] LorenRuntime missing (ReplicatedStorage.LorenRuntime or next to this shim): run loren update")',
 	'return (require :: any)(rt)',
 	'',
 ].join('\n');
@@ -87,13 +104,66 @@ const TEMPLATE_GITIGNORE = 'gitignore';
 
 const DOCS_URL = 'https://fabideveloper.github.io/Loren-Framework/';
 
+// The npm package root (holds package.json, index.js, lib/, project/).
+const PACKAGE_ROOT = path.join(__dirname, '..');
+
+// What `loren init` copies from the package's project/ folder. Anything else there
+// (loren_premade, the old aftman.toml, a stray sourcemap) stays out of new projects.
+const SCAFFOLD_ENTRIES = Object.freeze(['default.project.json', 'selene.toml', 'loren', 'loren_packages', 'src']);
+
+// Test code never reaches a user's place (crit-07): Rojo and Argon skip these under loren_packages.
+const GLOB_IGNORE_PATHS = Object.freeze(['loren_packages/**/*.spec.lua', 'loren_packages/**/*.spec.luau']);
+
+const isSpecFile = (name) => /\.spec\.luau?$/i.test(name);
+
+// Written as .gitignore by `loren init` (npm never ships a .gitignore, so it lives here; crit-13).
+const GITIGNORE_LINES = Object.freeze([
+	'sourcemap.json',
+	`${BACKUP_DIR}/`,
+	'*.rbxl',
+	'*.rbxlx',
+	'*.rbxl.lock',
+	'*.rbxlx.lock',
+]);
+
+// `loren inject <kind>`: premade folder -> project folder (dx-24, life:corr-19).
+const PREMADE_KINDS = Object.freeze({
+	service: Object.freeze({ premadeDir: 'services', target: 'services' }),
+	controller: Object.freeze({ premadeDir: 'controllers', target: 'controllers' }),
+	shared: Object.freeze({ premadeDir: 'shared', target: 'shared' }),
+});
+
+const PREMADE_DIR = 'loren_premade';
+
+// Premades that used the scaffold's Example* names. They are not shipped (package.json "files")
+// and `inject --list` hides them, so an inject can never collide with the scaffold (dx-25).
+const RETIRED_PREMADES = Object.freeze(['services/ExampleService.luau', 'controllers/ExampleController.luau']);
+
+// The single source for `loren make`: the scaffold's own examples (dx-33).
+const MODULE_TEMPLATES = Object.freeze({
+	service: Object.freeze({ file: 'src/server/Services/ExampleService.luau', placeholder: 'ExampleService' }),
+	controller: Object.freeze({ file: 'src/client/Controllers/ExampleController.luau', placeholder: 'ExampleController' }),
+});
+
 module.exports = {
+	PACKAGE_ROOT,
+	SCAFFOLD_ENTRIES,
+	GLOB_IGNORE_PATHS,
+	isSpecFile,
+	GITIGNORE_LINES,
+	PREMADE_KINDS,
+	PREMADE_DIR,
+	RETIRED_PREMADES,
+	MODULE_TEMPLATES,
 	PREFIX,
 	PROJECT_FILE,
 	PACKAGE_PROJECT_DIR,
 	FOLDERS,
 	INSTANCE_PATHS,
 	DEFAULT_PATHS,
+	SCRIPT_SYNC,
+	LOREN_CONFIG_FILE,
+	SCRIPT_SYNC_PATHS,
 	TOOLS,
 	MANAGERS,
 	MANAGER_FILES,

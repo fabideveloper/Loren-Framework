@@ -35,7 +35,7 @@ local control = LT:WaitForChild("TestControl") :: RemoteEvent
 local report = LT:WaitForChild("TestReport") :: RemoteEvent
 
 local function say(text: string)
-	print("[LorenTest] " .. text)
+	print("(LORENঌ - TEST) " .. text)
 end
 
 -- [[ Boot ]]

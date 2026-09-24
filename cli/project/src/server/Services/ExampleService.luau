@@ -1,28 +1,26 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Types = require(ReplicatedStorage.Shared.LorenTypes)
-
 local ExampleService = {
-	-- Names of other Services this one needs. Autocompletes from existing Services.
-	Dependencies = ({}) :: { Types.ServiceName },
+	-- Names of other Services this one needs. They start first and appear in self.Dependencies.
+	Dependencies = {},
 
-	-- Functions inside Client are exposed to the network
+	-- Functions clients can call: function ExampleService.Client:Name(player, ...) (self.Server is this Service).
 	Client = {},
 
-	-- List signal names here. Loren injects them automatically.
+	-- Signal names. Loren creates them in self.Signals: self.Signals.Name:Fire(player, ...) or :FireAll(...).
 	Signals = {},
 
-	-- Optional: Security checks for Client functions
+	-- Checks that run before the Client function with the same name, in dot style:
+	-- Name = function(player, ...) return true end
 	Middleware = {},
 }
 
--- Called when the framework initializes (Synchronous)
-function ExampleService:LorenIgnite()
-	-- Cast a resolved dependency for full intellisense on it, e.g.:
-	-- local Foo = self.Dependencies.Foo :: typeof(require(game:GetService("ServerScriptService").Server.Services.Foo))
-end
+-- Typed deps (optional): local Types = require(game:GetService("ServerScriptService").Server.LorenServerTypes),
+-- then Dependencies = { "OtherService" } :: { Types.ServiceName }, and in LorenIgnite:
+-- local deps: Types.ServerDeps = self.Dependencies :: any. `loren types` keeps the names current.
 
--- Called after all modules are ignited (Asynchronous)
-function ExampleService:LorenBurn()
-end
+-- Runs first, in dependency order. Set up state here; do not yield.
+function ExampleService:LorenIgnite() end
+
+-- Runs after every Service has ignited, each in its own thread.
+function ExampleService:LorenBurn() end
 
 return ExampleService

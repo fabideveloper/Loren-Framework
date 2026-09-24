@@ -1,135 +1,109 @@
-# LOREN-FRAMEWORK
-<p align="center">
-  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/refs/heads/main/assets/logo.png" width="250" alt="Loren Framework Logo"></img>
-</p>
+# Loren CLI
 
-<p align="center">
-  <a href="https://fabideveloper.github.io/Loren-Framework/" target="_blank">
-    <strong>📖 View Documentation</strong>
-  </a>
-</p>
+Command-line tool for [Loren](https://fabideveloper.github.io/Loren-Framework/), a Roblox Luau framework.
+It creates projects for **Rojo**, **Argon** or **Roblox Script Sync** (built into Studio), adds Services,
+Controllers and packages, and updates a project's Loren runtime.
 
-[![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework)
-> "Burning like a beating heart."
-
-Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
-
----
-## Instalation
-
-To install Loren globally, in your terminal, run:
+## Install
 
 ```bash
-npm install -g loren-framework
+npm i -g loren-framework     # Node 18 or newer
 ```
 
-(Note: Depending on your system permissions, Windows users might need to run their terminal as Administrator, and Mac/Linux users might need to prefix the command with `sudo`).
+You also need a toolchain manager ([Rokit](https://github.com/rojo-rbx/rokit) is recommended; Aftman and
+Foreman work too) and the Rojo or Argon plugin in Studio (`rojo plugin install` / `argon plugin install`).
 
-## CLI Commands
+## Start a project
 
-| Command | Description |
+```bash
+loren init my-game              # asks Rojo, Argon or None (Script Sync)
+loren init my-game --tool argon --yes
+cd my-game
+loren serve                     # then connect the plugin in Studio and press Play
+```
+
+`init` writes the runtime (`loren/`), the bundled Promise, `src/` with a bootstrap, an example Service and an
+example Controller, `rokit.toml`, `.gitignore` and `.vscode/settings.json`, then installs the toolchain and
+builds the sourcemap. `--no-tools` skips those two steps (offline or CI).
+
+## Commands
+
+| Command | What it does |
 | :--- | :--- |
-| `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
-| `loren add <user/repo> [custom name]` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
-| `loren make <type> <name>` | Forges a new service or controller with full [![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework) boilerplate. |
-| `loren inject <type> <name>` | Injects a pre-built module from your loren_premade folder into your active source code. |
-| `loren refresh` | Manually refresh the Rojo / Argon sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |
-| `loren ignite` | Calls `rojo serve` / `argon serve` automatically |
-| `loren migrate` | Migrate the current project between Rojo and Argon |
+| `loren init <name> [--tool rojo\|argon\|none] [--yes] [--no-tools]` | Create a project. |
+| `loren make <service\|controller> <Name> [--force]` | Create `src/server/Services/<Name>.luau` or `src/client/Controllers/<Name>.luau` from the template. |
+| `loren inject <service\|controller\|shared> <Name> [--force]` | Copy a premade into `Services/`, `Controllers/` or `src/shared/`. Your project's `loren_premade/` is searched first. |
+| `loren inject --list` | List premades (built in: `PointsService`, `PointsController`, `ExampleShared`). |
+| `loren add <user/repo[#ref] \| URL> [Alias] [--force]` | Download a repository into `loren_packages/<Alias>`. |
+| `loren refresh [--watch]` | Regenerate `LorenTypes`, then the sourcemap. |
+| `loren serve` (alias `ignite`) | Run `rojo serve` / `argon serve --sourcemap` (Script Sync: nothing to serve). |
+| `loren migrate [--to rojo\|argon] [--yes]` | Switch the project between Rojo and Argon. |
+| `loren update [--dry-run] [--yes] [--no-native]` | Update **this project's** runtime (see below). |
+| `loren types` | Regenerate `LorenTypes.luau` and `LorenServerTypes.luau`. |
+| `loren doctor [--fix] [--yes]` | Check Node, the toolchain, the project layout and your middleware. |
 
+Every command that touches Rojo or Argon takes `--tool rojo|argon|none`; otherwise the tool comes from
+`.loren.json` (Script Sync), then `rokit.toml` / `aftman.toml` / `foreman.toml`, then what is installed. Names must be Luau identifiers.
+`make`, `inject` and `add` never overwrite anything without `--force` (the old copy goes to `.loren-backup/`).
+Every command exits non-zero when a step fails, and never prompts without a terminal (pass `--yes`).
 
----
+**Packages.** `loren add evaera/roblox-lua-promise` is refused: Promise is already bundled in
+`loren_packages/Promise` and the runtime requires it. Try `loren add howmanysmall/Janitor` instead. A package
+is a snapshot (no dependency resolution, no lockfile); pin a version with `#tag`. Require it with
+`require(ReplicatedStorage.LorenPackages.<Alias>)`.
 
-## Core Architecture
+**Typed dependencies (optional).** `LorenTypes` (shared) and `LorenServerTypes` (server) list your module names.
+The templates show the pattern: `Dependencies = { "Name" } :: { Types.ClientDependencyName }`, then
+`local deps: Types.ClientDeps = self.Dependencies :: any`. `make`, `inject`, `add` and `refresh` keep them current.
 
-Loren is built on a Dependency Injection (DI) system. You never have to manually require() your internal modules; simply list their names in the Dependencies table, and Loren resolves them automatically during the boot sequence.
+## Updating
 
-### Module Structure
-A simple structure example:
+Two separate things get updated:
 
-```lua
--- a Simple service
-local Service = { 
-    Dependencies = {"AnotherService"}; -- any service you want
-    Client = { };
-    Signals = {"SendData"};
-    Middleware = { 
-        GetDataMultiplied = function(_, multiplier : number) -- check if multiplier is postiive before sending data back to the player
-            return multiplier > 0
-        end
-    };
-}
+- **The CLI:** `npm i -g loren-framework`.
+- **A project's runtime:** run `loren update` in the project root. It replaces `loren/`, writes the shim
+  (`src/shared/Loren.luau`), patches `default.project.json`, vendors a test-free Promise, regenerates the types
+  and the sourcemap, and runs the middleware lint. Replaced files are backed up to `.loren-backup/`. Your
+  Services and Controllers are not touched, except for the optional middleware rewrite below.
 
--- Init
-function Service:LorenIgnite()
-    self.someData = "I am data"
-end
+**From 1.5.1:** your Services and Controllers run unchanged. `loren update --dry-run` shows the plan; `loren update`
+applies it. If you wrote middleware in colon style (`function X.Middleware:Buy(player)`), `update` and
+`doctor --fix` offer to rewrite it to dot style (`function X.Middleware.Buy(player)`); it needs a confirmation or
+`--yes`. Then press Play in Studio and read Loren's boot report.
 
-function Service.Client:GetDataMultiplied(player : Player, multiplier : number) -- Returns a promise
-    return self.Server.someData
-end
+**Between 2.x versions:** update the CLI, then run `loren update` in each project. Running it twice is safe.
 
-function Service:LorenBurn()
-    -- Fire a signal to everyone
-    self.Signals.SendData:FireAll(self.someData)
-end
+## Rojo or Argon
 
--- a Simple Controller
-local Controller = {
-    Dependencies = {"AnotherController", "Service"}; -- any controller/service you want. We require the previous service
-}
+Both are fully supported. The differences Loren handles for you:
 
-function Controller:LorenIgnite()
-    print("I am ignited!")
-end
+| | Rojo | Argon |
+| :--- | :--- | :--- |
+| `loren serve` | `rojo serve default.project.json` | `argon serve default.project.json --sourcemap` |
+| Sourcemap | `rojo sourcemap ... -o sourcemap.json`; Luau-LSP regenerates it | `argon sourcemap ...`; Argon keeps it fresh while serving |
+| `.vscode/settings.json` | `luau-lsp.sourcemap.autogenerate: true` | `false` (Argon writes it) |
 
-function Controller:LorenBurn()
-    -- Pull the Proxy from our resolved dependencies
-    local PointsService = self.Dependencies.Service
+`loren migrate` rewrites the toolchain manifest, the Luau-LSP settings and the sourcemap, and installs the new
+tool. It reports success only when the new tool runs.
 
-    -- Calling a Method (Returns a Promise)
-    PointsService:GetDataMultiplied(10):andThen(function(result)
-        print("Server says:", result)
-    end):catch(warn)
+## None (Roblox Script Sync)
 
-    -- Connecting to a Signal
-    PointsService.Signals.SendData:Connect(function(data)
-        print("Received Signal Data:", data)
-    end)
-end
+`loren init my-game --tool none` uses Studio's built-in [Script Sync](https://create.roblox.com/docs/scripting/sync):
+no Rojo, no Argon, no project file (`.loren.json` marks the project). Only Folders sync, so the runtime lives
+inside four synced folders:
 
--- Bootstrapping
--- Getting the framework running is incredibly simple:
-local Loren = require("path to loren")
+| Directory (sync it to the Studio Folder of the same path) | Holds |
+| :--- | :--- |
+| `ReplicatedStorage/Shared` | the shim `Loren.luau`, `LorenRuntime/`, `LorenTypes.luau` |
+| `ReplicatedStorage/LorenPackages` | `Promise.luau` |
+| `ServerScriptService/Server` | `Server.server.luau`, `LorenServer/`, `Services/`, `LorenServerTypes.luau` |
+| `StarterPlayer/StarterPlayerScripts/Client` | `Client.local.luau` (a LocalScript), `Controllers/` |
 
-Loren.AddServices("path to services") / Loren.AddControllers("path to controllers")
-Loren:SetOnFire()
-```
+In Studio, create those Folders, right-click each one > **Sync to…**, pick its directory and choose **Keep Disk**;
+then press Play (the project's README has the steps). Autocomplete: Luau-LSP in plugin mode with the "Luau Language
+Server Companion" Studio plugin. `make`, `inject`, `types`, `update` and `doctor` work as usual, without a sourcemap;
+`loren update` rewrites the files and Studio picks them up. `migrate` to or from Script Sync is not automated yet.
 
--> Note on v1.0.0: In this current version, Controllers cannot yet access Services directly. This cross-boundary communication is slated for a future update.
+## License
 
-->  Note on v1.1.0: Cross-boundary communication is now fully operational. Controllers can include Services in their dependencies to access the binary bridge and call server-side logic via Promises.
-
--> Note on v1.2.0: The CLI has been completely overhauled for a zero-friction developer experience. Toolchain initialization (Aftman, Rojo, and VS Code settings) is now fully automated during `loren init`, and you can now use `loren inject` to instantly drop your own reusable templates from `loren_premade` directly into your active game logic.
-
--> Note on v1.2.1: Bug fixes and security changes
-
--> Note on v1.2.2: Added `loren refresh` and remove .import from Loren
-
--> Note on v1.2.3: All signals are now nested inside the "Signals" Table for services and controllers
-
--> Note on v1.2.4: Fixed fatal bug where signals could only transfer 1 argument a time.
-
--> Note on v1.3.0: Added :Once to signals, improved the buffer pool q (removed old caching), added client call timeout warn and improved security. *fixed bugs : promises could only transfer 1 argument at a time.
-
-->Note on v1.4.0: Fixed old premade PlayersService, added support for argon and a command to migrate from argon to rojo and viceversa. update the init command.
-
-->Note on v1.4.2: Published the framework to `npm` and updated the structure.
-
-->Note on v1.5.0: Added Documentation
-
-->Note on v1.5.1: Minor bug fix, updated docs
-
-
-### Documentation
-Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.
+MIT

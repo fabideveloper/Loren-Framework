@@ -1,5 +1,9 @@
 {
     "name": "project",
+    "globIgnorePaths": [
+        "loren_packages/**/*.spec.lua",
+        "loren_packages/**/*.spec.luau"
+    ],
     "tree": {
         "$className": "DataModel",
         "ReplicatedStorage": {

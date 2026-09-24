@@ -27,6 +27,8 @@ function createLogger({ write, color = false } = {}) {
 		warn: (msg) => write('err', `${PREFIX} ${paint(ANSI.yellow, 'Warning:')} ${msg}\n`),
 		error: (msg) => write('err', `${PREFIX} ${paint(ANSI.red, 'Error:')} ${msg}\n`),
 		plain: (msg = '') => write('out', `${msg}\n`),
+		// Unformatted text (commander's help and usage errors).
+		raw: (channel, text) => write(channel === 'err' ? 'err' : 'out', String(text)),
 	};
 	return log;
 }

@@ -1,492 +1,211 @@
 #!/usr/bin/env node
-const { program } = require('commander');
-const fs = require('fs-extra');
+'use strict';
+
 const path = require('path');
-const degit = require('degit');
-const { execSync } = require('child_process');
-const readline = require('readline');
+const { Command, Option, CommanderError } = require('commander');
+const pkg = require('./package.json');
+const { PACKAGE_PROJECT_DIR, DOCS_URL, MIN_NODE, PREFIX } = require('./lib/constants');
+const { createConsoleLogger } = require('./lib/log');
+const { detectTTY, createPrompter } = require('./lib/prompt');
+const { run } = require('./lib/run');
+const { createLanes } = require('./lib/lanes');
+const { isCliError } = require('./lib/errors');
+const { checkForUpdates } = require('./lib/notifier');
+const { initCommand } = require('./lib/commands/init');
+const { makeCommand, injectCommand } = require('./lib/commands/modules');
+const { addCommand } = require('./lib/commands/add');
+const { refreshCommand } = require('./lib/commands/refresh');
+const { serveCommand } = require('./lib/commands/serve');
+const { migrateCommand } = require('./lib/commands/migrate');
+const { updateCommand, typesCommand, doctorCommand } = require('./lib/commands/delegated');
 
-const packageInfo = require('./package.json');
+// 'none' is Roblox Script Sync (built into Studio): no program, no project file (.loren.json marks it).
+const TOOL_CHOICES = ['rojo', 'argon', 'none'];
+const toolOption = () =>
+	new Option('--tool <tool>', 'sync tool (default: from .loren.json / rokit.toml / aftman.toml / foreman.toml)').choices(TOOL_CHOICES);
 
-const notifierLib = require('update-notifier');
-const updateNotifier = notifierLib.default || notifierLib;
-
-const notifier = updateNotifier({ 
-  pkg: packageInfo,
-  //updateCheckInterval: 0 
-});
-
-if (notifier.update && notifier.update.latest !== packageInfo.version) {
-  process.on('exit', () => {
-    console.log(`\n(LORENঌ) A new version is available! (${notifier.update.latest}). To update, run: \x1b[33mnpm i -g loren-framework\x1b[0m\n`);
-  });
+// Everything a command touches from the outside world; tests replace any of it.
+function createContext(o = {}) {
+	const lanes = createLanes(o.lanes || {});
+	const templateDir = o.templateDir || PACKAGE_PROJECT_DIR;
+	// lib/tool.js's runner also starts .cmd shims on Windows; lib/run.js is the fallback.
+	let runner = o.run;
+	if (!runner) {
+		const toolLane = lanes.get('tool');
+		runner = toolLane && typeof toolLane.defaultRun === 'function' ? toolLane.defaultRun : run;
+	}
+	// update.js reads <packageRoot>/project; a template dir not named "project" leaves it to
+	// PACKAGE_PROJECT_DIR (which honours LOREN_TEMPLATE_DIR).
+	let packageRoot = o.packageRoot;
+	if (!packageRoot) packageRoot = path.basename(templateDir) === 'project' ? path.dirname(templateDir) : undefined;
+	return {
+		cwd: o.cwd || process.cwd(),
+		log: o.log || createConsoleLogger(),
+		isTTY: o.isTTY !== undefined ? Boolean(o.isTTY) : detectTTY(),
+		input: o.input || process.stdin,
+		output: o.output || process.stdout,
+		run: runner,
+		lanes,
+		degit: o.degit || ((spec, opts) => require('degit')(spec, opts)),
+		templateDir,
+		packageRoot,
+	};
 }
 
-program
-  .version(packageInfo.version)
-  .description('Loren-Framework - Burning like a beating heart.');
-
-const hasCommand = (cmd, cwd = process.cwd()) => {
-  try {
-    execSync(`${cmd} --version`, { cwd, stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const getProjectTool = (cwd = process.cwd()) => {
-  const aftmanPath = path.join(cwd, 'aftman.toml');
-  if (fs.existsSync(aftmanPath)) {
-    const content = fs.readFileSync(aftmanPath, 'utf8');
-    if (content.includes('argon-rbx/argon')) return 'argon';
-    if (content.includes('rojo-rbx/rojo')) return 'rojo';
-  }
-  return hasCommand('argon', cwd) ? 'argon' : 'rojo'; 
-};
-
-const generateSourcemap = (cwd, tool = getProjectTool(cwd)) => {
-  if (!hasCommand(tool, cwd)) return;
-  try {
-    const cmd = tool === 'argon'
-      ? 'argon sourcemap default.project.json -o sourcemap.json'
-      : 'rojo sourcemap default.project.json --output sourcemap.json';
-
-    execSync(cmd, { cwd, stdio: 'ignore' });
-  } catch (err) {
-    console.warn(`(LORENঌ) Warning: Failed to generate sourcemap with ${tool}.`);
-  }
-};
-
-const listModuleNames = (dir) => {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter((f) => f.endsWith('.luau') && fs.statSync(path.join(dir, f)).isFile())
-    .map((f) => f.slice(0, -'.luau'.length))
-    .sort();
-};
-
-// Regenerates src/shared/LorenTypes.luau with the literal name union of every
-// Service/Controller, so a Dependencies array can be cast to `{ Types.ServiceName }`
-// and get full autocomplete + typo-checking on the names.
-//
-// This file intentionally never contains `typeof(require(SomeService))`. Every
-// Service/Controller requires this file for the name union, so if this file also
-// required a Service/Controller back (to read its type), that pair would form a
-// require cycle -- Luau's analyzer treats requires inside type positions as real
-// graph edges even though they never run at runtime. For a fully typed reference
-// to one specific dependency, cast it inline where you consume it instead, e.g.:
-//   local Foo = self.Dependencies.Foo :: typeof(require(ServerScriptService.Server.Services.Foo))
-const generateTypes = (root) => {
-  try {
-    const services = listModuleNames(path.join(root, 'src', 'server', 'Services'));
-    const controllers = listModuleNames(path.join(root, 'src', 'client', 'Controllers'));
-
-    const serviceNameUnion = services.length ? services.map((n) => `"${n}"`).join(' | ') : 'string';
-    const controllerNameUnion = controllers.length ? controllers.map((n) => `"${n}"`).join(' | ') : 'string';
-
-    const content = `--!strict
---[[
-\tAUTO-GENERATED by the Loren CLI.
-\tDo not edit by hand -- re-run \`loren refresh\` (or \`loren make\` / \`loren inject\`) to update.
-
-\tOnly literal name unions live here, never \`typeof(require(...))\` of a Service or
-\tController -- every Service/Controller requires this file, so doing that here would
-\tcreate a require cycle for every single one of them. For a fully typed reference to
-\tone specific dependency, cast it inline where you consume it, e.g.:
-\t\tlocal Foo = self.Dependencies.Foo :: typeof(require(ServerScriptService.Server.Services.Foo))
-]]
-
-export type ServiceName = ${serviceNameUnion}
-export type ControllerName = ${controllerNameUnion}
-
-return nil
-`;
-
-    fs.outputFileSync(path.join(root, 'src', 'shared', 'LorenTypes.luau'), content);
-  } catch (err) {
-    console.warn(`(LORENঌ) Warning: Failed to generate LorenTypes.luau.`);
-  }
-};
-
-const askSyncTool = () => {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    console.log('\n(LORENঌ) Which sync tool do you prefer?');
-    rl.question('  [1] Rojo (Default)\n  [2] Argon\n> ', (answer) => {
-      rl.close();
-      resolve(answer.trim() === '2' ? 'argon' : 'rojo');
-    });
-  });
-};
-
-const confirmMigration = (targetTool) => {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(`\n(LORENঌ) Migrate project to ${targetTool}? (y/N): `, (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === 'y');
-    });
-  });
-};
-
-program
-  .command('init <name>')
-  .description('Initialize a new Loren-Framework project')
-  .action(async (name) => {
-    const targetDir = path.join(process.cwd(), name);
-    const templateDir = path.join(__dirname, 'project'); 
-
-    if (fs.existsSync(targetDir)) {
-      return console.error(`(LORENঌ) Error: Folder "${name}" already exists.`);
-    }
-
-    const tool = await askSyncTool();
-    const toolString = tool === 'argon' 
-      ? 'argon = "argon-rbx/argon@2.0.6"' 
-      : 'rojo = "rojo-rbx/rojo@7.4.1"';
-
-    try {
-      console.log(`(LORENঌ) Building "${name}"...`);
-      await fs.copy(templateDir, targetDir);
-
-      const aftmanPath = path.join(targetDir, 'aftman.toml');
-
-      if (!fs.existsSync(aftmanPath)) {
-        console.log(`(LORENঌ) Creating new aftman.toml...`);
-        fs.writeFileSync(aftmanPath, `[tools]\n${toolString}`);
-      } else {
-        let content = fs.readFileSync(aftmanPath, 'utf8');
-        const toolCheck = tool === 'argon' ? 'argon =' : 'rojo =';
-        
-        if (!content.includes(toolCheck)) {
-          console.log(`(LORENঌ) ${tool === 'argon' ? 'Argon' : 'Rojo'} missing from aftman.toml. Injecting...`);
-          if (content.includes('[tools]')) {
-            content = content.replace('[tools]', `[tools]\n${toolString}`);
-          } else {
-            content += `\n[tools]\n${toolString}`;
-          }
-          fs.writeFileSync(aftmanPath, content);
-        }
-      }
-
-      try {
-        console.log(`(LORENঌ) Syncing toolchain...`);
-        execSync('aftman install', { cwd: targetDir, stdio: 'inherit' });
-      } catch (err) {
-        console.warn(`(LORENঌ) Aftman failed. ${tool} might not be available.`);
-      }
-
-      const projectFilePath = path.join(targetDir, 'default.project.json');
-      if (fs.existsSync(projectFilePath)) {
-        const projectData = await fs.readJson(projectFilePath);
-        projectData.name = name;
-
-        if (projectData.tree && projectData.tree.ReplicatedStorage) {
-          projectData.tree.ReplicatedStorage.Shared = { "$path": "src/shared" };
-          projectData.tree.ReplicatedStorage.LorenPackages = { "$path": "loren_packages" };
-        }
-        await fs.writeJson(projectFilePath, projectData, { spaces: 4 });
-      }
-
-      const vscodeDir = path.join(targetDir, '.vscode');
-      const settings = {
-        "luau-lsp.rojo.projectPath": "default.project.json",
-        "luau-lsp.sourcemap.autogenerate": tool === 'rojo', 
-        "luau-lsp.sourcemap.rojoProjectFile": "default.project.json",
-        "luau-lsp.sourcemap.enabled": true,
-        "luau-lsp.sourcemap.sourcemapFile": "sourcemap.json",
-      };
-      await fs.ensureDir(vscodeDir);
-      await fs.writeJson(path.join(vscodeDir, 'settings.json'), settings, { spaces: 4 });
-
-      console.log(`(LORENঌ) Generating fresh sourcemap...`);
-      const oldMap = path.join(targetDir, 'sourcemap.json');
-      if (fs.existsSync(oldMap)) fs.removeSync(oldMap);
-
-      generateSourcemap(targetDir, tool);
-      generateTypes(targetDir);
-
-      console.log(`\n(LORENঌ) Done! Project "${name}" is ready.`);
-      console.log(`(LORENঌ) To start coding, run:`);
-      console.log(`\x1b[1m\x1b[4mcd ${name}\x1b[0m and then: \x1b[1m\x1b[4mcode .\x1b[0m\n`);
-
-    } catch (err) {
-      console.error(`(LORENঌ) Init failed:`, err.message);
-    }
-  });
-
-program
-  .command('make <type> <name>')
-  .description('Create a new service or controller with Loren boilerplate')
-  .action((type, name) => {
-    const root = process.cwd();
-    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
-      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
-    }
-
-    const typeLower = type.toLowerCase();
-    let subFolder = '';
-    let content = '';
-
-    if (typeLower === 'service') {
-      subFolder = 'src/server/Services';
-      content = `local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Types = require(ReplicatedStorage.Shared.LorenTypes)
-
-local ${name} = {
-  -- Names of other Services this one needs. Autocompletes from existing Services.
-  Dependencies = {} :: { Types.ServiceName },
-
-  Client = {},
-
-  -- List signal names here. Loren injects them automatically.
-  Signals = {},
-
-  -- Optional: Security checks for Client functions
-  Middleware = {},
+// A command's context with a prompter that honours its --yes. Without a TTY no prompt ever reads.
+function withPrompt(ctx, opts = {}) {
+	const prompt = createPrompter({ yes: Boolean(opts.yes), isTTY: ctx.isTTY, input: ctx.input, output: ctx.output });
+	return { ...ctx, prompt };
 }
 
--- Called when the framework initializes (Synchronous)
-function ${name}:LorenIgnite()
-  -- Cast a resolved dependency for full intellisense on it, e.g.:
-  -- local Foo = self.Dependencies.Foo :: typeof(require(game:GetService("ServerScriptService").Server.Services.Foo))
-
-end
-
--- Called after all modules are ignited (Asynchronous)
-function ${name}:LorenBurn()
-
-end
-
-return ${name}`;
-
-    } else if (typeLower === 'controller') {
-      subFolder = 'src/client/Controllers';
-      content = `local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Types = require(ReplicatedStorage.Shared.LorenTypes)
-
-local ${name} = {
-  -- Names of other Controllers this one needs. Autocompletes from existing Controllers.
-  Dependencies = {} :: { Types.ControllerName },
+function nodeTooOld(version = process.versions.node) {
+	const [maj, min] = version.split('.').map(Number);
+	const [needMaj, needMin] = MIN_NODE.split('.').map(Number);
+	return maj < needMaj || (maj === needMaj && min < needMin);
 }
 
--- Called when the framework initializes (Synchronous)
-function ${name}:LorenIgnite()
-  -- Cast a resolved dependency for full intellisense on it, e.g.:
-  -- local Foo = self.Dependencies.Foo :: typeof(require(game:GetService("StarterPlayer").StarterPlayerScripts.Client.Controllers.Foo))
+function buildProgram(ctx, state) {
+	const program = new Command();
+	program
+		.name('loren')
+		.description('Loren, a Roblox framework. Burning like a beating heart.')
+		.version(pkg.version, '-v, --version', 'print the CLI version')
+		.exitOverride()
+		.configureOutput({ writeOut: (s) => ctx.log.raw('out', s), writeErr: (s) => ctx.log.raw('err', s) })
+		.showHelpAfterError('(run loren --help for usage)')
+		.addHelpText('after', `\nDocs: ${DOCS_URL}\nUpdate the CLI itself: npm i -g loren-framework`);
 
-end
+	// Runs a command and records its exit code; CliErrors become "Error: ..." and exit code 1.
+	const action =
+		(fn) =>
+		async (...args) => {
+			const command = args[args.length - 1];
+			const opts = command.opts();
+			state.code = await fn(withPrompt(ctx, opts), args.slice(0, -2), opts);
+		};
 
--- Called after all modules are ignited (Asynchronous)
-function ${name}:LorenBurn()
+	program
+		.command('init')
+		.argument('<name>', 'folder to create')
+		.description('create a new Loren project (Rojo, Argon or Roblox Script Sync)')
+		.addOption(toolOption())
+		.option('-y, --yes', 'never prompt; use the defaults (Rojo unless --tool)')
+		.option('--no-tools', 'skip the toolchain install and the sourcemap')
+		.action(action((c, [name], opts) => initCommand(c, name, opts)));
 
-end
+	program
+		.command('make')
+		.argument('<type>', 'service or controller')
+		.argument('<name>', 'module name (a Luau identifier, PascalCase)')
+		.description('create a Service or Controller from the template')
+		.option('-f, --force', 'replace an existing module of that name (backed up first)')
+		.addOption(toolOption())
+		.action(action((c, [type, name], opts) => makeCommand(c, type, name, opts)));
 
-return ${name}`;
+	program
+		.command('inject')
+		.argument('[type]', 'service, controller or shared')
+		.argument('[name]', 'premade name')
+		.description('copy a premade module into your project (see --list)')
+		.option('-l, --list', 'list the available premades')
+		.option('-f, --force', 'replace an existing module of that name (backed up first)')
+		.addOption(toolOption())
+		.action(action((c, [type, name], opts) => injectCommand(c, type, name, opts)));
 
-    } else {
-      return console.error(`(LORENঌ) Error: Type must be 'service' or 'controller'.`);
-    }
+	program
+		.command('add')
+		.argument('<repo>', 'user/repo[#ref] or a GitHub URL')
+		.argument('[alias]', 'folder name under loren_packages (default: the repo name)')
+		.description('download a GitHub repository into loren_packages')
+		.option('-f, --force', 'replace an existing package of that name (backed up first)')
+		.addOption(toolOption())
+		.action(action((c, [repo, alias], opts) => addCommand(c, repo, alias, opts)));
 
-    const filePath = path.join(root, subFolder, `${name}.luau`);
+	program
+		.command('refresh')
+		.description('regenerate LorenTypes, then the sourcemap')
+		.option('-w, --watch', 'keep regenerating while Services and Controllers change')
+		.addOption(toolOption())
+		.action(action((c, _args, opts) => refreshCommand(c, opts)));
 
-    if (fs.existsSync(filePath)) {
-      return console.error(`(LORENঌ) Error: ${name} already exists at ${subFolder}`);
-    }
+	program
+		.command('serve')
+		.alias('ignite')
+		.description('start the sync server (rojo serve / argon serve; Script Sync runs inside Studio)')
+		.addOption(toolOption())
+		.action(action((c, _args, opts) => serveCommand(c, opts)));
 
-    try {
-      fs.outputFileSync(filePath, content);
-      console.log(`(LORENঌ) Successfully forged ${typeLower}: ${name}`);
-      generateSourcemap(root);
-      generateTypes(root);
-    } catch (err) {
-      console.error(`(LORENঌ) Failed to create file:`, err.message);
-    }
-  });
+	program
+		.command('migrate')
+		.description('switch this project between Rojo and Argon')
+		.addOption(new Option('--to <tool>', 'the tool to switch to (default: the other one)').choices(TOOL_CHOICES))
+		.option('-y, --yes', 'do not ask for confirmation')
+		.action(action((c, _args, opts) => migrateCommand(c, opts)));
 
+	program
+		.command('update')
+		.summary("update this PROJECT's Loren runtime (the CLI itself: npm i -g loren-framework)")
+		.description(
+			"update this PROJECT's Loren runtime to the one bundled with this CLI (loren/, the shim, " +
+				'default.project.json, types, sourcemap, lint). To update the CLI itself: npm i -g loren-framework',
+		)
+		.option('--dry-run', 'show what would change; change nothing')
+		.option('-y, --yes', 'do not ask for confirmation')
+		.option('--no-native', 'install the runtime without @native attributes')
+		.addOption(toolOption())
+		.action(action((c, _args, opts) => updateCommand(c, opts)));
 
-program
-  .command('inject <type> <name>')
-  .description('Inject a premade module from loren_premade into your project')
-  .action((type, name) => {
-    const root = process.cwd();
-    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
-      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
-    }
+	program
+		.command('types')
+		.description('regenerate LorenTypes (and LorenServerTypes) from your Services and Controllers')
+		.action(action((c) => typesCommand(c)));
 
-    const typeLower = type.toLowerCase();
-    let srcPath = '';
-    let destPath = '';
+	program
+		.command('doctor')
+		.description('check the toolchain and the project (including colon-style middleware)')
+		.option('--fix', 'offer to rewrite colon-style middleware to dot style (with a backup)')
+		.option('-y, --yes', 'apply fixes without asking')
+		.action(action((c, _args, opts) => doctorCommand(c, opts)));
 
-    if (typeLower === 'service') {
-      srcPath = path.join(root, 'loren_premade', 'services');
-      destPath = path.join(root, 'src', 'server', 'services');
-    } else if (typeLower === 'controller') {
-      srcPath = path.join(root, 'loren_premade', 'controllers');
-      destPath = path.join(root, 'src', 'client', 'controllers');
-    } else if (typeLower === 'shared') {
-      srcPath = path.join(root, 'loren_premade', 'shared');
-      destPath = path.join(root, 'src', 'shared');
-    } else {
-      return console.error(`(LORENঌ) Error: Type must be 'service', 'controller' or 'shared'.`);
-    }
+	return program;
+}
 
-    const fileSrc = path.join(srcPath, `${name}.luau`);
-    const dirSrc = path.join(srcPath, name);
-    const fileDest = path.join(destPath, `${name}.luau`);
-    const dirDest = path.join(destPath, name);
+// Runs the CLI and resolves its exit code. Never calls process.exit (tests run it in-process).
+async function main(argv = process.argv, overrides = {}) {
+	const ctx = createContext(overrides);
+	if (nodeTooOld(overrides.nodeVersion)) {
+		ctx.log.error(`Loren needs Node ${MIN_NODE} or newer (this is ${overrides.nodeVersion || process.versions.node}).`);
+		return 1;
+	}
+	if (overrides.notify !== false) await checkForUpdates(pkg, { isTTY: ctx.isTTY });
 
-    let targetSrc = '';
-    let targetDest = '';
+	const state = { code: 0 };
+	const program = buildProgram(ctx, state);
+	try {
+		await program.parseAsync(argv);
+	} catch (err) {
+		if (err instanceof CommanderError) return err.exitCode === 0 ? 0 : err.exitCode || 1;
+		if (isCliError(err)) {
+			ctx.log.error(err.message);
+			if (err.hint) ctx.log.raw('err', `${PREFIX} ${err.hint}\n`);
+			return 1;
+		}
+		ctx.log.error(`Unexpected failure: ${err && err.stack ? err.stack : err}`);
+		return 1;
+	}
+	return typeof state.code === 'number' ? state.code : 0;
+}
 
-    if (fs.existsSync(fileSrc)) {
-      targetSrc = fileSrc;
-      targetDest = fileDest;
-    } else if (fs.existsSync(dirSrc)) {
-      targetSrc = dirSrc;
-      targetDest = dirDest;
-    } else {
-      return console.error(`(LORENঌ) Error: Premade ${name} not found in ${srcPath}.`);
-    }
+module.exports = { main, buildProgram, createContext, nodeTooOld };
 
-    if (fs.existsSync(targetDest)) {
-      return console.error(`(LORENঌ) Error: ${name} already exists in destination.`);
-    }
-
-    try {
-      fs.copySync(targetSrc, targetDest);
-      console.log(`(LORENঌ) Successfully injected ${typeLower}: ${name}`);
-      generateSourcemap(root);
-      generateTypes(root);
-    } catch (err) {
-      console.error(`(LORENঌ) Failed to inject:`, err.message);
-    }
-  });
-
-program
-  .command('add <repo> [alias]')
-  .description('Add a module from GitHub into loren_packages')
-  .action(async (repo, alias) => {
-    const parts = repo.split('/');
-    if (parts.length < 2) return console.error(`(LORENঌ) Invalid repo format. Use: user/repo`);
-
-    let folderName = alias || parts[1].split('#')[0].replace('roblox-lua-', '');
-    const packageDir = path.join(process.cwd(), 'loren_packages');
-
-    if (!fs.existsSync(path.join(process.cwd(), 'default.project.json'))) {
-        console.warn(`(LORENঌ) Warning: Not in a Loren project root.`);
-    }
-
-    const targetFolder = path.join(packageDir, folderName);
-    console.log(`(LORENঌ) Fetching ${repo} as "${folderName}"...`);
-
-    try {
-      await degit(repo, { cache: false, force: true }).clone(targetFolder);
-      generateSourcemap(process.cwd());
-      console.log(`(LORENঌ) Module "${folderName}" added to loren_packages!`);
-    } catch (err) {
-      console.error(`(LORENঌ) Download failed: ${err.message}`);
-    }
-  });
-
-program
-  .command('refresh')
-  .description('Manually refresh the sourcemap and LorenTypes.luau to update VS Code IntelliSense')
-  .action(() => {
-    const root = process.cwd();
-
-    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
-      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
-    }
-
-    const tool = getProjectTool(root);
-    if (hasCommand(tool, root)) {
-      console.log(`(LORENঌ) Refreshing sourcemap via ${tool === 'argon' ? 'Argon' : 'Rojo'}...`);
-      generateSourcemap(root, tool);
-      console.log(`(LORENঌ) Sourcemap updated successfully!`);
-    } else {
-      console.error(`(LORENঌ) Error: ${tool === 'argon' ? 'Argon' : 'Rojo'} is not installed or available in this directory.`);
-    }
-
-    generateTypes(root);
-    console.log(`(LORENঌ) LorenTypes.luau updated successfully!`);
-  });
-
-program
-  .command('ignite')
-  .description('Start the local sync server.')
-  .action(() => {
-    const root = process.cwd();
-    const tool = getProjectTool(root);
-    
-    console.log(`(LORENঌ) Heart is beating. ${tool === 'argon' ? 'Argon' : 'Rojo'} server enabled`);
-    execSync(`${tool} serve`, { cwd: root, stdio: 'inherit' });
-  });
-
-  program
-  .command('migrate')
-  .description('Migrate the current project between Rojo and Argon')
-  .action(async () => {
-    const root = process.cwd();
-    
-    if (!fs.existsSync(path.join(root, 'default.project.json'))) {
-      return console.error(`(LORENঌ) Error: You must be in the root of a Loren project.`);
-    }
-
-    const currentTool = getProjectTool(root);
-    const targetTool = currentTool === 'rojo' ? 'argon' : 'rojo';
-    
-    console.log(`(LORENঌ) Detected current sync tool: ${currentTool}`);
-    const shouldMigrate = await confirmMigration(targetTool);
-    
-    if (!shouldMigrate) {
-      return console.log(`(LORENঌ) Migration cancelled.`);
-    }
-
-    console.log(`(LORENঌ) Migrating to ${targetTool}...`);
-
-    const aftmanPath = path.join(root, 'aftman.toml');
-    const rojoString = 'rojo = "rojo-rbx/rojo@7.4.1"';
-    const argonString = 'argon = "argon-rbx/argon@2.0.6"';
-
-    if (fs.existsSync(aftmanPath)) {
-      let content = fs.readFileSync(aftmanPath, 'utf8');
-      
-      if (targetTool === 'argon') {
-        content = content.replace(/rojo\s*=\s*['"].*?['"]/g, '');
-        if (!content.includes('argon =')) content = content.replace('[tools]', `[tools]\n${argonString}`);
-      } else {
-        content = content.replace(/argon\s*=\s*['"].*?['"]/g, '');
-        if (!content.includes('rojo =')) content = content.replace('[tools]', `[tools]\n${rojoString}`);
-      }
-      
-      fs.writeFileSync(aftmanPath, content.replace(/^\s*[\r\n]/gm, ''));
-
-      try {
-        console.log(`(LORENঌ) Updating toolchain via Aftman...`);
-        execSync('aftman install', { cwd: root, stdio: 'ignore' });
-      } catch (err) {
-        console.warn(`(LORENঌ) Warning: Aftman failed. ${targetTool} might not be installed globally.`);
-      }
-    }
-
-    const vscodeSettingsPath = path.join(root, '.vscode', 'settings.json');
-    if (fs.existsSync(vscodeSettingsPath)) {
-      try {
-        const settings = await fs.readJson(vscodeSettingsPath);
-        settings["luau-lsp.sourcemap.autogenerate"] = targetTool === 'rojo';
-        await fs.writeJson(vscodeSettingsPath, settings, { spaces: 4 });
-        console.log(`(LORENঌ) Updated VS Code Luau-LSP settings.`);
-      } catch (err) {
-        console.warn(`(LORENঌ) Warning: Failed to update VS Code settings.`);
-      }
-    }
-
-    console.log(`(LORENঌ) Generating fresh sourcemap with ${targetTool}...`);
-    generateSourcemap(root, targetTool);
-
-    console.log(`(LORENঌ) Success! Project fully migrated to ${targetTool}.`);
-  });
-
-program.parse(process.argv);
+if (require.main === module) {
+	main().then(
+		(code) => {
+			process.exitCode = code;
+		},
+		(err) => {
+			console.error(err);
+			process.exitCode = 1;
+		},
+	);
+}

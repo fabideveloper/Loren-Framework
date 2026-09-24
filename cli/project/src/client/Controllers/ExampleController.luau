@@ -1,19 +1,17 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Types = require(ReplicatedStorage.Shared.LorenTypes)
-
 local ExampleController = {
-	-- Names of other Controllers this one needs. Autocompletes from existing Controllers.
-	Dependencies = ({}) :: { Types.ControllerName },
+	-- Names of Controllers, or of Services that have a Client table or Signals, that this one needs.
+	-- They appear in self.Dependencies; a Service arrives as a proxy (its Client functions return Promises).
+	Dependencies = {},
 }
 
--- Called when the framework initializes (Synchronous)
-function ExampleController:LorenIgnite()
-	-- Cast a resolved dependency for full intellisense on it, e.g.:
-	-- local Foo = self.Dependencies.Foo :: typeof(require(game:GetService("StarterPlayer").StarterPlayerScripts.Client.Controllers.Foo))
-end
+-- Typed deps (optional): local Types = require(game:GetService("ReplicatedStorage").Shared.LorenTypes),
+-- then Dependencies = { "OtherController" } :: { Types.ClientDependencyName }, and in LorenIgnite:
+-- local deps: Types.ClientDeps = self.Dependencies :: any. `loren types` keeps the names current.
 
--- Called after all modules are ignited (Asynchronous)
-function ExampleController:LorenBurn()
-end
+-- Runs first, in dependency order, once the server is ready. Set up state here; do not yield.
+function ExampleController:LorenIgnite() end
+
+-- Runs after every Controller has ignited, each in its own thread.
+function ExampleController:LorenBurn() end
 
 return ExampleController

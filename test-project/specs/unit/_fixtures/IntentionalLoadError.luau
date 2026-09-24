@@ -3,6 +3,6 @@
 -- Output when a clone is required (expected). The collector skips "_" folders and only requires
 -- modules named *.spec, so this never runs on its own.
 error(
-	"[LorenTest] intentional load error: a spec checks that a module failing to load is reported (expected in the Output)",
+	"(LORENঌ - TEST) intentional load error: a spec checks that a module failing to load is reported (expected in the Output)",
 	0
 )

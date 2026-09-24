@@ -821,6 +821,19 @@ function Lifecycle.setOffline(offline: boolean): ()
 	offlineFlag = offline == true
 end
 
+-- The one lookup of the LorenServer folder (server only): a direct child of ServerScriptService
+-- (Rojo, Argon), else anywhere below it (Script Sync keeps it in ServerScriptService.Server; one
+-- recursive search), else, with `wait`, WaitForChild for a direct child (10 s). nil if missing.
+function Lifecycle.findServerFolder(wait: boolean?): Instance?
+	local ServerScriptService = game:GetService("ServerScriptService")
+	local name = C.Names.ServerFolder
+	local inst = ServerScriptService:FindFirstChild(name) or ServerScriptService:FindFirstChild(name, true)
+	if inst == nil and wait then
+		inst = ServerScriptService:WaitForChild(name, 10)
+	end
+	return inst
+end
+
 -- The LorenServer index if the facade already required it, else nil. `load` (server only, for
 -- Testing.Reset): also require ServerScriptService.LorenServer when it exists, because specs may have
 -- required its modules directly (same module instances, never reset otherwise). Requiring the
@@ -830,12 +843,7 @@ function Lifecycle.loadedServer(load: boolean?): any?
 		return nil
 	end
 	local S = serverLoader(true)
-	if
-		S == nil
-		and load
-		and IS_SERVER
-		and game:GetService("ServerScriptService"):FindFirstChild(C.Names.ServerFolder) ~= nil
-	then
+	if S == nil and load and IS_SERVER and Lifecycle.findServerFolder(false) ~= nil then
 		S = serverLoader(false)
 	end
 	return S

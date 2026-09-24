@@ -48,7 +48,7 @@ function Backend.boot(instrument: boolean)
 					Instrument.wrapService(module.Name, service)
 				end
 			else
-				warn("[LorenTest] fixture " .. module.Name .. " failed to load: " .. tostring(service))
+				warn("(LORENঌ - TEST) fixture " .. module.Name .. " failed to load: " .. tostring(service))
 			end
 		end
 	end

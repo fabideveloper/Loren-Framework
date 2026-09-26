@@ -1,6 +1,4 @@
 --!strict
--- 2.0 Signals on the server: ServerSignal objects (Fire side only), target and argument checks at
--- the caller's line, FireFor / FireExcept, BootSignal to every player, and departed players.
 local Players = game:GetService("Players")
 
 local V2 = require(script.Parent._V2)

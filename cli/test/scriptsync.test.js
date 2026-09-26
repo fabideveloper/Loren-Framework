@@ -1,8 +1,5 @@
 'use strict';
 
-// `--tool none`: Roblox Script Sync (built into Studio). init, the prompt, tool detection, update,
-// types/make/inject/doctor on the Script Sync layout, serve/migrate, and the shim's three copies.
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');

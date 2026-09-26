@@ -1,19 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Proxy: client service proxies (owner lane: client-net).
-	Spec: IMPLEMENTATION.md sections 3.17 (Proxy) and 7; robust.md section 4.2.
-
-	One proxy per networked service, built once from the manifest and cached:
-	- proxy.Method(...)        a stub created once per method (captures only its owner table and route):
-	                           proxy:M(...) -> Promise; the 1.5.1 no-argument dot call proxy.M() still works;
-	                           a dot call with arguments raises "Call Svc:M(...) with ':'".
-	- proxy.Try.Method(...)    the same stubs in Try form: proxy.Try:M(...) -> (ok, ...), yielding.
-	- proxy.Signals.X          the ClientSignal built with the route (Connect/Once/Wait/DisconnectAll).
-	- proxy.ClientEvents.X     a ClientEvent object: ev:Fire(...) -> ClientNet.fire.
-	Each of the four tables gets an __index that raises for unknown keys (with a suggestion and the
-	member list), then is frozen. Hits are plain table reads; nothing is allocated per access or per call.
-]]
 
 local C = require(script.Parent.Constants)
 local Types = require(script.Parent.Types)

@@ -1,6 +1,4 @@
 --!strict
--- Testing (lifecycle): Loren.Testing.Mount / Fired / Emit / Reset. IMPLEMENTATION.md section 3.12.
--- Runs on the server.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage:WaitForChild("LorenRuntime")
@@ -303,7 +301,7 @@ return function(t: any)
 			expect((Loren.SetOnFire():timeout(5):await())).toBe(true)
 			expect(Loren.State).toBe("Ready")
 			expect(Config.isFrozen()).toBe(true)
-			expect(Loren.DumpManifest().version).toBe("2.0.0")
+			expect(Loren.DumpManifest().version).toBe(Loren.Version)
 			Testing.Reset({ Offline = true })
 			expect(Loren.State).toBe("Idle")
 			expect(Loren.IsOnFire).toBe(false)

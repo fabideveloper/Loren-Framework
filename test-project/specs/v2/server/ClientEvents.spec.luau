@@ -1,6 +1,4 @@
 --!strict
--- 2.0 ClientEvents on the server: ServerEvent objects (Connect side only), listener isolation, and
--- the arrivals of the clients' Ping / Aim (unreliable, coalesced) / Seq (unreliable, Ordered).
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

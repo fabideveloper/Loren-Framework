@@ -1,17 +1,25 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/main/assets/logo-readme.png" width="220" alt="Loren logo">
+</p>
+
 # Loren CLI
 
-Command-line tool for [Loren](https://fabideveloper.github.io/Loren-Framework/), a Roblox Luau framework.
+The command-line tool for [Loren](https://fabideveloper.github.io/Loren-Framework/), a Luau framework for Roblox.
 It creates projects for **Rojo**, **Argon** or **Roblox Script Sync** (built into Studio), adds Services,
 Controllers and packages, and updates a project's Loren runtime.
+
+> **2.0 is in beta.** It's on the `next` tag. `latest` is still 1.5.1 until 2.0 is stable.
 
 ## Install
 
 ```bash
-npm i -g loren-framework     # Node 18 or newer
+npm i -g loren-framework@next   # the 2.0 beta, Node 18 or newer
+npm i -g loren-framework        # 1.5.1, the current stable
 ```
 
-You also need a toolchain manager ([Rokit](https://github.com/rojo-rbx/rokit) is recommended; Aftman and
-Foreman work too) and the Rojo or Argon plugin in Studio (`rojo plugin install` / `argon plugin install`).
+For Rojo or Argon you also need [Rokit](https://github.com/rojo-rbx/rokit), which `loren init` uses to install the
+tool, and the Rojo or Argon plugin in Studio (`rojo plugin install` / `argon plugin install`). Existing projects with
+an `aftman.toml` or `foreman.toml` can keep using Aftman or Foreman (Rokit reads those files too).
 
 ## Start a project
 
@@ -23,8 +31,8 @@ loren serve                     # then connect the plugin in Studio and press Pl
 ```
 
 `init` writes the runtime (`loren/`), the bundled Promise, `src/` with a bootstrap, an example Service and an
-example Controller, `rokit.toml`, `.gitignore` and `.vscode/settings.json`, then installs the toolchain and
-builds the sourcemap. `--no-tools` skips those two steps (offline or CI).
+example Controller, `rokit.toml`, `.gitignore` and `.vscode/settings.json`. Then it installs the toolchain and
+builds the sourcemap. `--no-tools` skips those two steps, which helps offline or in CI.
 
 ## Commands
 
@@ -42,14 +50,16 @@ builds the sourcemap. `--no-tools` skips those two steps (offline or CI).
 | `loren types` | Regenerate `LorenTypes.luau` and `LorenServerTypes.luau`. |
 | `loren doctor [--fix] [--yes]` | Check Node, the toolchain, the project layout and your middleware. |
 
-Every command that touches Rojo or Argon takes `--tool rojo|argon|none`; otherwise the tool comes from
-`.loren.json` (Script Sync), then `rokit.toml` / `aftman.toml` / `foreman.toml`, then what is installed. Names must be Luau identifiers.
-`make`, `inject` and `add` never overwrite anything without `--force` (the old copy goes to `.loren-backup/`).
-Every command exits non-zero when a step fails, and never prompts without a terminal (pass `--yes`).
+- Commands that touch Rojo or Argon take `--tool rojo|argon|none`. Without it, the tool comes from `.loren.json`
+  (Script Sync), then `rokit.toml` / `aftman.toml` / `foreman.toml`, then whatever is installed.
+- Module and package names have to be Luau identifiers. Project names for `init` may also use spaces, `-` and `.`.
+- `make`, `inject` and `add` never overwrite anything without `--force`. The old copy goes to `.loren-backup/`.
+- A failed step exits non-zero.
+- Nothing prompts without a terminal. Pass `--yes`.
 
-**Packages.** `loren add evaera/roblox-lua-promise` is refused: Promise is already bundled in
-`loren_packages/Promise` and the runtime requires it. Try `loren add howmanysmall/Janitor` instead. A package
-is a snapshot (no dependency resolution, no lockfile); pin a version with `#tag`. Require it with
+**Packages.** `loren add evaera/roblox-lua-promise` is refused, because Promise is already bundled in
+`loren_packages/Promise` and the runtime needs it. Try `loren add howmanysmall/Janitor` instead. A package is a
+snapshot: no dependency resolution, no lockfile. Pin a version with `#tag`, and require it with
 `require(ReplicatedStorage.LorenPackages.<Alias>)`.
 
 **Typed dependencies (optional).** `LorenTypes` (shared) and `LorenServerTypes` (server) list your module names.
@@ -58,24 +68,25 @@ The templates show the pattern: `Dependencies = { "Name" } :: { Types.ClientDepe
 
 ## Updating
 
-Two separate things get updated:
+There are two separate things to update:
 
-- **The CLI:** `npm i -g loren-framework`.
+- **The CLI:** `npm i -g loren-framework@next` during the beta.
 - **A project's runtime:** run `loren update` in the project root. It replaces `loren/`, writes the shim
-  (`src/shared/Loren.luau`), patches `default.project.json`, vendors a test-free Promise, regenerates the types
-  and the sourcemap, and runs the middleware lint. Replaced files are backed up to `.loren-backup/`. Your
-  Services and Controllers are not touched, except for the optional middleware rewrite below.
+  (`src/shared/Loren.luau`), patches `default.project.json`, puts the bundled Promise in `loren_packages/Promise`
+  (without its test files), regenerates the types and the sourcemap, and runs the middleware check. Replaced files
+  are backed up to `.loren-backup/`. Your Services and Controllers aren't touched, except for the optional
+  middleware rewrite below.
 
-**From 1.5.1:** your Services and Controllers run unchanged. `loren update --dry-run` shows the plan; `loren update`
-applies it. If you wrote middleware in colon style (`function X.Middleware:Buy(player)`), `update` and
-`doctor --fix` offer to rewrite it to dot style (`function X.Middleware.Buy(player)`); it needs a confirmation or
-`--yes`. Then press Play in Studio and read Loren's boot report.
+**From 1.5.1:** your Services and Controllers run unchanged. `loren update --dry-run` shows the plan, and
+`loren update` applies it. If you wrote middleware in colon style (`function X.Middleware:Buy(player)`), `update`
+and `doctor --fix` offer to rewrite it to dot style (`function X.Middleware.Buy(player)`). That needs a
+confirmation or `--yes`. Then press Play in Studio and read Loren's boot report.
 
 **Between 2.x versions:** update the CLI, then run `loren update` in each project. Running it twice is safe.
 
 ## Rojo or Argon
 
-Both are fully supported. The differences Loren handles for you:
+Loren works with both. Here's what differs (Loren sets it up for you):
 
 | | Rojo | Argon |
 | :--- | :--- | :--- |
@@ -83,14 +94,14 @@ Both are fully supported. The differences Loren handles for you:
 | Sourcemap | `rojo sourcemap ... -o sourcemap.json`; Luau-LSP regenerates it | `argon sourcemap ...`; Argon keeps it fresh while serving |
 | `.vscode/settings.json` | `luau-lsp.sourcemap.autogenerate: true` | `false` (Argon writes it) |
 
-`loren migrate` rewrites the toolchain manifest, the Luau-LSP settings and the sourcemap, and installs the new
-tool. It reports success only when the new tool runs.
+`loren migrate` rewrites the toolchain manifest, the Luau-LSP settings and the sourcemap, then installs the new
+tool. It only reports success once the new tool runs.
 
-## None (Roblox Script Sync)
+## Script Sync (`--tool none`)
 
-`loren init my-game --tool none` uses Studio's built-in [Script Sync](https://create.roblox.com/docs/scripting/sync):
-no Rojo, no Argon, no project file (`.loren.json` marks the project). Only Folders sync, so the runtime lives
-inside four synced folders:
+`loren init my-game --tool none` uses Studio's built-in [Script Sync](https://create.roblox.com/docs/scripting/sync).
+There's no Rojo, no Argon and no project file (`.loren.json` marks the project). Only Folders sync, so the
+runtime lives inside four synced folders:
 
 | Directory (sync it to the Studio Folder of the same path) | Holds |
 | :--- | :--- |
@@ -99,10 +110,11 @@ inside four synced folders:
 | `ServerScriptService/Server` | `Server.server.luau`, `LorenServer/`, `Services/`, `LorenServerTypes.luau` |
 | `StarterPlayer/StarterPlayerScripts/Client` | `Client.local.luau` (a LocalScript), `Controllers/` |
 
-In Studio, create those Folders, right-click each one > **Sync to…**, pick its directory and choose **Keep Disk**;
-then press Play (the project's README has the steps). Autocomplete: Luau-LSP in plugin mode with the "Luau Language
-Server Companion" Studio plugin. `make`, `inject`, `types`, `update` and `doctor` work as usual, without a sourcemap;
-`loren update` rewrites the files and Studio picks them up. `migrate` to or from Script Sync is not automated yet.
+In Studio, create those Folders, right-click each one > **Sync to…**, pick its directory and choose **Keep Disk**.
+Then press Play (the project's README has the steps). For autocomplete, use Luau-LSP in plugin mode with the
+"Luau Language Server Companion" Studio plugin. `make`, `inject`, `types`, `update` and `doctor` work as usual,
+without a sourcemap, and Studio picks up the files `loren update` rewrites. `migrate` to or from Script Sync
+isn't automated yet.
 
 ## License
 

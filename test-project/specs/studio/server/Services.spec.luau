@@ -43,8 +43,6 @@ return function(t: any)
 			end
 		end, { skip = skip })
 
-		-- 1.5.1 bug net:arch-11: in Studio Run mode 1.5.1 resolves server dependencies to network
-		-- proxies because IsClient is also true there (fixed in 2.0).
 		it("injects Dependencies as a name -> service map", function()
 			local dependent = Env.service("DependentService")
 			expect(dependent.Dependencies.CounterService).toBe(Env.service("CounterService"))

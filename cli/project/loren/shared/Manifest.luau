@@ -1,13 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Manifest (owner lane: schema). MANIFEST bytes: the server encodes its model once at boot (Routes), every
-	accepted HELLO copies the same bytes, and the client decodes them (ClientNet).
-	Spec: design/loren-2.0/IMPLEMENTATION.md §3.7 and §4.7 (byte layout); descriptors via Schema (§3.6).
-
-	encode checks the model (a malformed model is a server bug and raises); decode never throws and returns
-	nil + a reason for anything malformed, including a protocol mismatch, unsorted names and trailing bytes.
-]]
 
 local C = require(script.Parent.Constants)
 local Types = require(script.Parent.Types)
@@ -35,9 +27,6 @@ local TIMEOUT_DS_MAX = C.Limit.TIMEOUT_MAX * 10
 
 -- 7 x f32, 2 x u32, 3 x u16, 5 x u8
 local LIMITS_BYTES = 7 * 4 + 2 * 4 + 3 * 2 + 5
--- smallest possible encodings: a service is str8 (>= 1) + u16 count; a member is str8 (>= 1) + kind/route/flags
--- (4) + its kind fields (>= 2). Counts larger than the bytes left are rejected ("truncated") before anything is
--- allocated. An empty name counts as 1 byte here, so it reaches the name check and gets its own reason.
 local MIN_SERVICE_BYTES = 3
 local MIN_MEMBER_BYTES = 7
 

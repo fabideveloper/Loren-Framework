@@ -1,16 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	CallSpammer: fires fixture calls at a steady rate and records latency and outcomes.
-
-		local bot = CallSpammer.new(proxies, { rate = 30, payloadSize = 64, mix = "mixed" })
-		bot:start() ... bot:stop()
-		bot:waitIdle(12)          -- wait for in-flight calls (1.5.1 drops can take 10 s to time out)
-		bot:summary()             -- CallKit summary + { durationS, achievedRate, skipped }
-
-	mix: "mixed" (Echo, Size, Ping, Increment, Total, Drop, NameOf), "echo" or "light".
-	maxInFlight bounds unsettled calls; calls over it are skipped and counted (never queued).
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")

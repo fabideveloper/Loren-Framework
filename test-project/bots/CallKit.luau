@@ -1,16 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	CallKit: shared by CallSpammer, Burst and Soak (not a bot itself).
-
-	CallKit.new(proxies, payloadSize, mix) -> kit
-		kit:fire(onSettled?)    fires the next call of the mix; never throws
-		kit.inFlight            calls not settled yet
-		kit:summary() -> { sent, ok, wrong, timeouts, errors, unsettled, rttMs = Summary, reasons }
-
-	A call is "ok" when it resolves with the right values, "wrong" when it resolves with wrong
-	values, a "timeout" when it rejects with a message containing "Timeout", else an "error".
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

@@ -1,17 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Bucket: time-based token bucket (owner lane: limiter). Spec: IMPLEMENTATION.md section 3.2.
-
-	Used by the server limits (server/Limits.luau) and by the client mirror (ClientNet), so both
-	sides run the same refill math. A bucket is a plain record; the caller passes `now`
-	(os.clock()) so nothing here reads a clock, allocates or yields.
-
-	Refill: tokens = min(burst, tokens + (now - stamp) * rate); stamp = now.
-	A `now` older than the stamp refills nothing and keeps the stamp (os.clock() is monotonic, but
-	callers may pass a `now` captured a moment earlier; this keeps the math exact for them).
-	Costs may exceed 1 (bytes, message counts). A failed take still stores the refilled tokens.
-]]
 
 export type Bucket = { tokens: number, stamp: number, rate: number, burst: number }
 

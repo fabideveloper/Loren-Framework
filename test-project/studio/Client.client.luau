@@ -1,14 +1,6 @@
 --!strict
 --!optimize 2
---[[
-	LorenTest client. Boots Loren with TestController (or connects the raw baseline), says hello
-	to the server over the plain TestReport RemoteEvent, then runs what the server asks for:
-		check  run studio/client specs (+ v2/client on 2.0), send the results
-		start  start the bots for this client's role; stop: stop, drain, send the stats
-]]
 
--- Runtime detection (Env) looks at ReplicatedStorage with FindFirstChild: wait for the initial
--- replication so a folder that has not arrived yet is not mistaken for "raw".
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end

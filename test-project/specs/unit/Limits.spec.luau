@@ -1,6 +1,4 @@
 --!strict
--- Unit spec: LorenServer.Limits (limiter lane). Runs on the server in Studio (Run mode or Play).
--- Every Limits function takes `now`, so the clock here is fake and every result is deterministic.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -35,12 +33,6 @@ type SimOptions = {
 	jitter: (rng: Random, sentAt: number, seconds: number) -> number,
 }
 
---[[
-	An honest client with an endless backlog: it flushes at FLUSH_HZ and fires queued frames while its
-	admission mirror (every server rate and burst x `mirror`) can pay for the whole frame, charging
-	all three buckets at fire time (IMPLEMENTATION.md 3.17 Mirror). Each frame reaches the server after
-	a fixed latency plus `jitter`; the server admits frames in arrival order. Returns (sent, refused).
-]]
 local function simulate(opts: SimOptions): (number, number)
 	local m = opts.mirror
 	local rng = Random.new(opts.seed)
@@ -86,8 +78,6 @@ local function randomJitter(rng: Random, _sentAt: number, _seconds: number): num
 	return rng:NextNumber(0, 0.1)
 end
 
--- Frames sent in the first half are 100 ms late, the rest on time: at the switch the server sees
--- 100 ms of traffic twice as dense as it was sent.
 local function stepJitter(_rng: Random, sentAt: number, seconds: number): number
 	return if sentAt < seconds / 2 then 0.1 else 0
 end

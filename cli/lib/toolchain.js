@@ -62,8 +62,6 @@ function readManifests(root) {
 	return out;
 }
 
-// Replaces `from` with `to` in a manifest's text; adds `to` when missing. Keeps other tools,
-// comments and the file's line endings.
 function switchManifestTool(text, manager, from, to) {
 	const eol = /\r\n/.test(text) ? '\r\n' : '\n';
 	let lines = String(text).split(/\r?\n/);
@@ -84,10 +82,6 @@ function switchManifestTool(text, manager, from, to) {
 	return out;
 }
 
-// Installs the project's toolchain. Rokit reads rokit.toml, aftman.toml and foreman.toml, so it
-// goes first; Aftman and Foreman only read their own file. Output is shown (stdio inherit) so a
-// trust prompt can be answered; without a TTY stdin is closed, so a prompt fails instead of
-// hanging, and --yes passes --no-trust-check (crit-06).
 function installToolchain({ root, run, isTTY, yes }) {
 	const manifests = readManifests(root);
 	const has = (m) => hasCommand(run, m, root);
@@ -109,9 +103,6 @@ function installToolchain({ root, run, isTTY, yes }) {
 	return { ok: false, manager, reason: `${manager} install failed: ${describeFailure(manager, result)}.` };
 }
 
-// Luau-LSP settings for the chosen tool (the same keys as tool.js). Only Rojo can autogenerate the
-// sourcemap from VS Code; Argon writes its own (argon serve --sourcemap or the Argon extension).
-// Script Sync: plugin mode, no sourcemap.
 function vscodeSettings(tool) {
 	if (isScriptSyncTool(tool)) return { ...PLUGIN_SETTINGS };
 	return {
@@ -122,8 +113,6 @@ function vscodeSettings(tool) {
 	};
 }
 
-// Writes or merges .vscode/settings.json. A file that is not plain JSON (VS Code allows comments)
-// is left alone and reported, so no user comment is ever lost.
 function applyVscodeSettings(root, tool) {
 	const file = path.join(root, '.vscode', 'settings.json');
 	const wanted = vscodeSettings(tool);

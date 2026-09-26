@@ -1,28 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Calls: pending client-to-server calls (owner lane: client-net).
-	Spec: IMPLEMENTATION.md sections 3.17 (Calls) and 5; robust.md section 4.6 and 4.10 F.
-
-	- Records are pooled and uniform (every field always set). A call id is a u16 (1..65535),
-	  handed out round-robin and never reused while its call is pending or quarantined.
-	- Deadline = enqueue time + route timeout. One sweeper (ClientNet's Heartbeat, every
-	  SWEEP_INTERVAL) rejects expired calls with the exact 1.5.1 "(LORENঌ) Timeout" string and
-	  ends quarantines. No thread, timer or closure per call.
-	- A timed-out or cancelled call is quarantined until
-	  max(now + QUARANTINE_AFTER_CANCEL, sendTime + timeout + QUARANTINE_AFTER_DEADLINE). A call whose
-	  frame is still unsent gets its end when the frame fires (`fired`), so the server can never still
-	  hold an id when it is reused. A quarantined id keeps its route, so a late OK/ERR is decoded and
-	  dropped (`late`).
-	- Promise mode: `Promise._new(SOURCE, executor)` when PromiseTraces says no traces, else
-	  `Promise.new`; the executor is a module-level function reading a module-level setup slot, and
-	  `onCancel` gets the record's `cancelFn` (created once per pooled record).
-	- Try mode: the caller's thread parks and is resumed with (true, ...) or (false, message, info).
-	- Bookkeeping always finishes before user code runs (a settle may start new calls), and records
-	  collected for a batch settle are checked by generation before use.
-
-	Calls never requires ClientNet; ClientNet drives it. No side effects on require.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -32,9 +9,6 @@ local Types = require(script.Parent.Types)
 local Errors = require(script.Parent.Errors)
 local Config = require(script.Parent.Config)
 
--- The vendored evaera Promise (pinned; `_new` runs the executor synchronously, init.lua:230-306).
--- WaitForChild as in Lifecycle: the facade requires this module first, and on a client whose
--- ReplicatedStorage is still replicating a plain index would fail the whole facade require.
 local Promise: any = require(ReplicatedStorage:WaitForChild("LorenPackages"):WaitForChild("Promise"))
 
 local Err = C.Err
@@ -54,10 +28,6 @@ local SWEEP_INTERVAL = Limit.SWEEP_INTERVAL
 -- Shown by the Promise library instead of a per-call traceback (unhandled rejections).
 local SOURCE = 'Loren remote call (Loren.Configure({ PromiseTraces = "Always" }) records call-site tracebacks)'
 
---[[
-	One pending or quarantined call. `route` is the ClientNet.ClientRoute (Calls only reads
-	service, member and timeout). `thread` is the parked caller for Try calls, else false.
-]]
 export type Req = {
 	id: number, -- 1..65535 while in use; 0 when free
 	gen: number, -- bumped on every alloc (stale-reference guard)
@@ -93,10 +63,6 @@ local timeoutCount = 0
 local clock: () -> number = os.clock
 local setup: Req? = nil -- the record the executor binds (set just before creating the Promise)
 
--- Scratch lists for batch settles (records + their generation at collection time). A settle runs
--- user code that can start another batch synchronously (an Ignite awaiting a call that times out
--- throws, the boot fails, ClientNet.fail() runs failAll), so every batch works above `batchTop` and
--- restores it when done: a nested batch never overwrites the entries of the one that started it.
 local batchReqs: { any } = {}
 local batchGens: { number } = {}
 local batchTop = 0
@@ -143,8 +109,6 @@ local function quarantine(req: Req, now: number)
 end
 
 local function onCancelled(req: Req)
-	-- Only a Started promise runs its hook, and a record is released only after its promise
-	-- settled, so the hook always belongs to the call currently in this record.
 	if req.state == PENDING then
 		quarantine(req, clock())
 	end
@@ -332,8 +296,6 @@ function Calls.reject(req: Req, code: number, msg: string?, data: any, incident:
 	deliverReject(th, rj, route, code, msg, data, incident, arg)
 end
 
--- A reply for a quarantined call: counted and dropped. The server answered, so it no longer holds
--- the id and the id is freed early.
 function Calls.late(req: Req): ()
 	if req.state == QUARANTINED then
 		lateCount += 1
@@ -356,8 +318,6 @@ function Calls.fired(id: number, seq: number, now: number): ()
 	end
 end
 
--- The call's frame could not be fired (FireServer raised: an unserializable ref). The server never
--- saw the call: a pending call rejects BadArgument, a quarantined one frees its id.
 function Calls.fireFailed(id: number): ()
 	local req = byId[id]
 	if req == nil or req.seq >= 0 then
@@ -370,8 +330,6 @@ function Calls.fireFailed(id: number): ()
 	end
 end
 
--- NOTICE FrameDropped run (first, count) on the reliable channel: the server refused those frames
--- at admission, so their calls reject RateLimited at once (wrap-aware match). Returns how many.
 function Calls.dropped(first: number, count: number): number
 	local base = batchTop
 	local k = base
@@ -403,8 +361,6 @@ end
 
 -- Sweeper -------------------------------------------------------------------------------------------
 
--- Every SWEEP_INTERVAL: expired calls reject Timeout and enter quarantine; ended quarantines free
--- their ids. Settles run after the traversal (user code may start new calls).
 function Calls.sweep(now: number): ()
 	if now < nextSweep then
 		return
@@ -478,8 +434,6 @@ end
 
 -- Reset ---------------------------------------------------------------------------------------------
 
--- Restores the require-time state. Pending calls are dropped silently (their promises stay pending
--- and parked Try threads are not resumed): a reset discards the runtime, it does not fail calls.
 function Calls._reset(): ()
 	byId = {}
 	live = 0

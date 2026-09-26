@@ -1,135 +1,130 @@
-# LOREN-FRAMEWORK
 <p align="center">
-  <img src="https://raw.githubusercontent.com/fabideveloper/Loren-Framework/refs/heads/main/assets/logo.png" width="250" alt="Loren Framework Logo"></img>
+  <img src="assets/logo-readme.png" width="260" alt="Loren: a pink heart with a blue and white flame inside">
 </p>
 
 <p align="center">
-  <a href="https://fabideveloper.github.io/Loren-Framework/" target="_blank">
-    <strong>📖 View Documentation</strong>
-  </a>
+  <a href="https://fabideveloper.github.io/Loren-Framework/"><b>Docs</b></a> ·
+  <a href="https://fabideveloper.github.io/Loren-Framework/docs/getting-started">Getting started</a> ·
+  <a href="https://fabideveloper.github.io/Loren-Framework/docs/getting-started/upgrading">Upgrading from 1.5.1</a> ·
+  <a href="https://www.npmjs.com/package/loren-framework">npm</a>
+  <br><br>
+  <a href="https://www.npmjs.com/package/loren-framework"><img src="https://img.shields.io/npm/v/loren-framework/next?label=2.0%20beta&color=f293b8" alt="npm next"></a>
+  <a href="https://www.npmjs.com/package/loren-framework"><img src="https://img.shields.io/npm/v/loren-framework/latest?label=stable&color=77a8ce" alt="npm latest"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1c1c1c" alt="MIT license"></a>
 </p>
 
-[![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework)
-> "Burning like a beating heart."
+# Loren
 
-Loren is a CLI-driven, lightweight Roblox framework designed to eliminate pathing headaches, automate VS Code environments, and provide a clean, predictable lifecycle for your game logic.
+Loren is a framework for Roblox games written in Luau. Server code goes in Services. Client code goes in
+Controllers. Each module lists the modules it needs by name, and Loren loads them, sorts them and starts them
+in order. When a Controller calls a Service, Loren carries the call and hands you a Promise. You don't create
+RemoteEvents and you don't maintain require paths. A CLI sets up projects for Rojo, Argon or Studio's Script Sync.
 
----
-## Instalation
+> [!NOTE]
+> **2.0 is in beta.** Install it with `npm i -g loren-framework@next`. Plain `npm i -g loren-framework`
+> still gives you 1.5.1 until 2.0 is stable.
 
-To install Loren globally, in your terminal, run:
+## What's new in 2.0
+
+Most of 2.0 is in the parts you don't see. 1.5.1 trusted clients more than it should have. 2.0 checks every
+packet before your code runs, drops junk without logging a line for each one, and tells you what went wrong
+with an error code and an incident id.
+
+We tested it in Roblox Studio. An exploiter bot fired 48,190 garbage packets, about 2,400 a second, while
+honest players kept playing. Then we ran the same attack against 1.5.1.
+
+| Same attack | 1.5.1 | 2.0 |
+| :--- | :--- | :--- |
+| Junk reaching your handlers | Crafted packets got through: 43 handler crashes | None. 0 of 48,190 accepted |
+| Server warnings | 47,364, about 142k a minute | 0 |
+| Server frame time | About 3x slower | Unchanged, p99 6.1 ms |
+| Route ids | Stolen through the handshake RemoteFunction | No RemoteFunction to ask |
+| Honest players' calls | 83% OK (the test ran above 1.5.1's 50 calls/s cap) | 1,206 of 1,206 OK |
+
+Other numbers, all measured in Studio:
+
+- Stress, 3 players at 60 calls a second each: 100% of calls OK, 0 lost or reordered signals.
+- About 1.8 µs average handler cost. Round trip p50 about 15 ms, on one machine.
+- Messages go out in batches, so a 64-byte call costs about 76 bytes (about 12 bytes of overhead).
+- The check scenario passes with 1 and 3 players: 1,212 tests, 0 failed.
+
+The CLI's own suite (141 tests, run with Node) passes too, real Rojo and Argon runs included.
+
+New things you can use:
+
+- `proxy.Try:Method()` for an `ok, result` answer without a Promise chain
+- typed arguments with `Spec` and `T`
+- `ClientEvents` for client-to-server events, reliable or unreliable
+- `FireFor` and `FireExcept` on signals
+- `LorenExtinguish`, a hook that runs when the server shuts down
+- `Loren.Testing` for specs without a running server
+- a "Did you mean" suggestion in the boot report when a `Dependencies` name has a typo
+
+## Install and start
 
 ```bash
-npm install -g loren-framework
+npm i -g loren-framework@next   # the 2.0 beta, needs Node 18 or newer
+loren init my-game              # pick Rojo, Argon or None (Script Sync)
+cd my-game
+loren serve                     # then connect the Rojo or Argon plugin in Studio
 ```
 
-(Note: Depending on your system permissions, Windows users might need to run their terminal as Administrator, and Mac/Linux users might need to prefix the command with `sudo`).
+For Rojo or Argon you also need [Rokit](https://github.com/rojo-rbx/rokit): `loren init` uses it to install the
+tool. Script Sync needs nothing extra. Press Play. When the boot is done, Loren prints one `Burning on Server`
+line. If something is wrong, you get one report that lists every problem.
 
-## CLI Commands
-
-| Command | Description |
-| :--- | :--- |
-| `loren init <name>` | Scaffolds a new project with auto-configured VS Code settings and sourcemaps. |
-| `loren add <user/repo> [custom name]` | Clones a GitHub module into `loren_packages` and updates autocomplete instantly. |
-| `loren make <type> <name>` | Forges a new service or controller with full [![npm version](https://img.shields.io/npm/v/loren-framework.svg?color=blue)](https://www.npmjs.com/package/loren-framework) boilerplate. |
-| `loren inject <type> <name>` | Injects a pre-built module from your loren_premade folder into your active source code. |
-| `loren refresh` | Manually refresh the Rojo / Argon sourcemap to update VS Code IntelliSense (in case you added stuff outside of loren) |
-| `loren ignite` | Calls `rojo serve` / `argon serve` automatically |
-| `loren migrate` | Migrate the current project between Rojo and Argon |
-
-
----
-
-## Core Architecture
-
-Loren is built on a Dependency Injection (DI) system. You never have to manually require() your internal modules; simply list their names in the Dependencies table, and Loren resolves them automatically during the boot sequence.
-
-### Module Structure
-A simple structure example:
+Here's a Service and a Controller that talk to each other:
 
 ```lua
--- a Simple service
-local Service = { 
-    Dependencies = {"AnotherService"}; -- any service you want
-    Client = { };
-    Signals = {"SendData"};
-    Middleware = { 
-        GetDataMultiplied = function(_, multiplier : number) -- check if multiplier is postiive before sending data back to the player
-            return multiplier > 0
-        end
-    };
-}
+-- src/server/Services/PointsService.luau
+local PointsService = { Client = {}, Signals = { "PointsChanged" } }
+local points: { [Player]: number } = {}
 
--- Init
-function Service:LorenIgnite()
-    self.someData = "I am data"
+function PointsService:AddPoints(player: Player, amount: number)
+	points[player] = (points[player] or 0) + amount
+	self.Signals.PointsChanged:Fire(player, points[player])
 end
 
-function Service.Client:GetDataMultiplied(player : Player, multiplier : number) -- Returns a promise
-    return self.Server.someData
+-- Clients can call this. Loren passes the calling player first, so nobody can pose as someone else.
+function PointsService.Client:GetPoints(player: Player): number
+	return points[player] or 0
 end
 
-function Service:LorenBurn()
-    -- Fire a signal to everyone
-    self.Signals.SendData:FireAll(self.someData)
-end
-
--- a Simple Controller
-local Controller = {
-    Dependencies = {"AnotherController", "Service"}; -- any controller/service you want. We require the previous service
-}
-
-function Controller:LorenIgnite()
-    print("I am ignited!")
-end
-
-function Controller:LorenBurn()
-    -- Pull the Proxy from our resolved dependencies
-    local PointsService = self.Dependencies.Service
-
-    -- Calling a Method (Returns a Promise)
-    PointsService:GetDataMultiplied(10):andThen(function(result)
-        print("Server says:", result)
-    end):catch(warn)
-
-    -- Connecting to a Signal
-    PointsService.Signals.SendData:Connect(function(data)
-        print("Received Signal Data:", data)
-    end)
-end
-
--- Bootstrapping
--- Getting the framework running is incredibly simple:
-local Loren = require("path to loren")
-
-Loren.AddServices("path to services") / Loren.AddControllers("path to controllers")
-Loren:SetOnFire()
+return PointsService
 ```
 
--> Note on v1.0.0: In this current version, Controllers cannot yet access Services directly. This cross-boundary communication is slated for a future update.
+```lua
+-- src/client/Controllers/HudController.luau
+local HudController = { Dependencies = { "PointsService" } }
 
-->  Note on v1.1.0: Cross-boundary communication is now fully operational. Controllers can include Services in their dependencies to access the binary bridge and call server-side logic via Promises.
+-- LorenBurn runs once every module has started
+function HudController:LorenBurn()
+	local Points = self.Dependencies.PointsService
+	Points.Signals.PointsChanged:Connect(function(total)
+		print("Points:", total)
+	end)
+	local ok, total = Points.Try:GetPoints()
+	if ok then print("Starting with", total) end
+end
 
--> Note on v1.2.0: The CLI has been completely overhauled for a zero-friction developer experience. Toolchain initialization (Aftman, Rojo, and VS Code settings) is now fully automated during `loren init`, and you can now use `loren inject` to instantly drop your own reusable templates from `loren_premade` directly into your active game logic.
+return HudController
+```
 
--> Note on v1.2.1: Bug fixes and security changes
+## Upgrading from 1.5.1
 
--> Note on v1.2.2: Added `loren refresh` and remove .import from Loren
+```bash
+npm i -g loren-framework@next
+cd your-game
+loren update --dry-run   # shows what it will change
+loren update
+```
 
--> Note on v1.2.3: All signals are now nested inside the "Signals" Table for services and controllers
+Your Services and Controllers run unchanged. `loren update` replaces the runtime, backs up what it replaces to
+`.loren-backup/`, and offers to rewrite colon-style middleware. Then press Play and read the boot report. The
+[upgrade guide](https://fabideveloper.github.io/Loren-Framework/docs/getting-started/upgrading) lists every behavior change.
 
--> Note on v1.2.4: Fixed fatal bug where signals could only transfer 1 argument a time.
+## Help and feedback
 
--> Note on v1.3.0: Added :Once to signals, improved the buffer pool q (removed old caching), added client call timeout warn and improved security. *fixed bugs : promises could only transfer 1 argument at a time.
-
-->Note on v1.4.0: Fixed old premade PlayersService, added support for argon and a command to migrate from argon to rojo and viceversa. update the init command.
-
-->Note on v1.4.2: Published the framework to `npm` and updated the structure.
-
-->Note on v1.5.0: Added Documentation
-
-->Note on v1.5.1: Minor bug fix, updated docs
-
-
-### Documentation
-Full API references, including the binary protocol specifications and middleware implementation guides, are available in the project's documentation folder. Keep your logic tight, your network clean, and keep the heart burning.
+It's a beta, so try it on something you can afford to break. If something goes wrong,
+[open an issue](https://github.com/fabideveloper/Loren-Framework/issues) and paste the boot report.
+MIT licensed. Made by Fabi.

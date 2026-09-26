@@ -5,21 +5,60 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./cli
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          
-      - name: Publish from CLI folder
-        working-directory: ./cli
+
+      - name: Check the tag and pick the dist-tag
+        id: version
         run: |
-          npm install
-          npm publish
+          TAG="$GITHUB_REF_NAME"
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match cli/package.json version $VERSION. Expected tag v$VERSION."
+            exit 1
+          fi
+          case "$VERSION" in
+            *-*) DIST_TAG=next ;;
+            *)   DIST_TAG=latest ;;
+          esac
+          echo "Publishing loren-framework@$VERSION with dist-tag $DIST_TAG"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check the npm token
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::The NPM_TOKEN repository secret is missing or empty."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Show what will be published
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --tag "${{ steps.version.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -79,8 +79,6 @@ function listRelFiles(dir) {
 	return walkFiles(dir, { skipDirs: new Set() }).map((f) => toPosix(path.relative(dir, f)));
 }
 
-// Recursive copy. `filter(relPosix, isDirectory)` returns false to skip an entry;
-// `transform(relPosix, buffer)` may return a replacement string or buffer.
 function copyDir(src, dest, { filter = () => true, transform = null } = {}) {
 	const copied = [];
 	const visit = (from, to, relBase) => {

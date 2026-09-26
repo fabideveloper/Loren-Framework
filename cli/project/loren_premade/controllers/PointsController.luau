@@ -1,7 +1,3 @@
---[[
-	PointsController (premade): a Controller using a Service.
-	It needs the PointsService premade: loren inject service PointsService
-]]
 local PointsController = {
 	Dependencies = { "PointsService" },
 }

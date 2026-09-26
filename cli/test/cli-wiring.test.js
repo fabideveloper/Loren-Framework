@@ -1,8 +1,5 @@
 'use strict';
 
-// update, types, doctor, serve, migrate and refresh: they call the right module with the right
-// options and turn every failure into a non-zero exit code.
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');

@@ -1,45 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Dispatch (owner lane: server-net): calls and ClientEvents after decode. Caps, zombies, Serial,
-	middleware, handlers, replies, the watchdog.
-	Spec: design/loren-2.0/IMPLEMENTATION.md sections 3.16 (Dispatch), 4.11 and 5.
-
-	Calls (section 4.11):
-	- admit(ps, route) is a pure check made before decode: Busy (zombie caps, full queues), Serial
-	  queue (the Serial route is occupied), player queue (MaxRunningCalls yielded calls), or Run.
-	- accept gives the call a token (module counter) in ps.callTok[callId]. Run spawns runCall on the
-	  free runner (Signal.spawn); queued calls keep a packed copy of their arguments.
-	- runCall: global middleware, then the member's (a colon-flagged one denies), then
-	  xpcall(handler, ...). The member's middleware and handler are read on every call
-	  (module.Middleware[member], Client[member]) as 1.5.1 did, so a Service may set or wrap them in
-	  LorenIgnite or later; a replaced middleware gets the colon check again (cached per route).
-	  Middleware allows only on an exact `true`; a Promise is awaited;
-	  `false, "msg"` is Denied with msg; any other value denies; a throw is InternalError. A returned
-	  Promise is awaited before the reply. Loren.Reject (returned or thrown) is Rejected; any other
-	  error is InternalError with an incident id (logged with the traceback, text forwarded only if
-	  ForwardErrors allows). The traceback and the error text are built only when a log line or an
-	  OnError call will use them (or the text is forwarded).
-	- Yield detection: runCall stores its thread in `curThread`; finish stores its token in
-	  `lastFinished`. If lastFinished ~= token when the spawn returns, the call yielded: only then a
-	  CallRec is allocated and it counts toward MaxRunningCalls (and occupies a Serial route).
-	- finish replies only if ps.callTok[callId] still holds the call's token. A call the watchdog (or
-	  a repeat HELLO) abandoned is a zombie until its thread ends; zombies block only their route
-	  (MaxZombiesPerRoute) and, past MaxZombies per player, only routes holding one.
-	- When a call's thread ends its Serial route is freed and the head of that route's queue is
-	  re-admitted; then player-queue entries start while fewer than MaxRunningCalls are yielded. A
-	  queued entry older than receipt + timeout is dropped instead (the client already timed out).
-	  The re-admission and the queue pump run in one non-recursive loop per player (`drain`).
-	- Watchdog (sweep, every WATCHDOG_INTERVAL): a yielded call past receipt + timeout + WatchdogGrace
-	  is abandoned; CancelOnTimeout routes task.cancel the thread instead. A call or zombie whose thread
-	  died without reaching finish (its own code cancelled it) is released at once. Queued entries past
-	  receipt + timeout are dropped even while their route stays occupied (their ids are free again).
-	  Yielded calls of a player who left stay watched until their deadline (CancelOnTimeout still
-	  applies), then are forgotten.
-	ClientEvents run the same middleware; denied events are dropped (EventDenied), accepted ones go
-	to Signal.ServerEvent.deliver. With no middleware they are delivered without an extra runner hop.
-	Nothing is allocated per non-yielding call or event.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -116,8 +76,6 @@ local nextToken = 0 -- never reset: a thread from before a reset can never match
 local lastFinished = 0
 local curThread: thread? = nil
 local lastTrace: string? = nil
--- The route whose middleware/handler runs on traceThread (captureError decides from it whether a
--- traceback will be used). A handler that yielded runs later on a thread that no longer matches.
 local traceRoute: Route? = nil
 local traceThread: thread? = nil
 local tracesBuilt = 0 -- tracebacks built by captureError (specs)
@@ -156,8 +114,6 @@ local function uidOf(player: any): string
 	return if ok then tostring(uid) else "?"
 end
 
--- Will a failure on this route be logged now, or can OnError take one? Only then are its details
--- (traceback, error text) built. Pure: consumes no budget.
 local function wantDetails(route: Route): boolean
 	local now = clock()
 	if #errorHandlers > 0 and (now >= onErrorWindow or onErrorCount < ON_ERROR_RATE) then
@@ -167,8 +123,6 @@ local function wantDetails(route: Route): boolean
 	return (at == nil or now >= at) and Log.allowed()
 end
 
--- xpcall handler for handlers and middleware: keeps the error value (a thrown Loren.Reject stays
--- the same table) and stashes the traceback for the log line, when one will be used.
 local function captureError(err: any): any
 	if isReject(err) then
 		return err
@@ -318,8 +272,6 @@ end
 
 local drain: (ps: PlayerState) -> ()
 
--- The call's thread has ended (or a queued occupant was dropped): free its Serial route, then let
--- queued calls start.
 local function threadEnded(ps: PlayerState, route: Route)
 	if route.serial then
 		local id = route.id
@@ -491,9 +443,6 @@ local function looksColon(mw: any, fn: any): boolean
 	return ma == fa and ma >= 2 and not mv and not fv
 end
 
--- The member's middleware as it is now (nil = none) and whether it looks colon-defined. 1.5.1 read
--- Middleware[member] on every request, so a middleware set or replaced in LorenIgnite (or later)
--- guards the calls, and removing it removes the check.
 local function memberMiddleware(route: Route, fn: any): (any, boolean)
 	local t = middlewareTable(route.module)
 	local mw = if type(t) == "table" then rawget(t, route.member) else nil
@@ -530,8 +479,6 @@ local function runMiddleware(route: Route, mw: any, colon: boolean, player: Play
 	return evalMw(route, xpcall(mw, captureError, player, ...))
 end
 
--- Runs on the free runner. Middleware and handler are one protected sequence. The handler is
--- Client[member] as it is now (a missing one fails the call with InternalError).
 local function runCall(ps: PlayerState, route: Route, callId: number, token: number, _n: number, ...: any)
 	local thread = coroutine.running()
 	curThread = thread
@@ -663,8 +610,6 @@ local function drainBody(ps: PlayerState)
 	end
 end
 
--- Re-admits Serial queue heads and starts player-queue entries. Nested calls (a started entry that
--- finishes at once) only leave work for the outer loop, so the depth never grows.
 drain = function(ps: PlayerState)
 	if ps.draining then
 		return
@@ -677,10 +622,6 @@ drain = function(ps: PlayerState)
 	end
 end
 
--- Abandons a yielded call (watchdog, repeat HELLO): its slot and id are free. A thread that already
--- died without reaching finish (its own code cancelled or closed it) has simply ended.
--- CancelOnTimeout cancels the thread (the Serial route is released as if it ended); otherwise it is a
--- zombie until its thread ends.
 local function abandon(ps: PlayerState, callId: number, rec: CallRec)
 	ps.calls[callId] = nil
 	if ps.callTok[callId] == rec.token then
@@ -706,9 +647,6 @@ local function abandon(ps: PlayerState, callId: number, rec: CallRec)
 	ps.routeZombies[id] = (ps.routeZombies[id] or 0) + 1
 end
 
--- Drops queued entries (player queue and Serial queues) the client has already timed out on, even
--- while their route stays occupied (a zombie Serial occupant can live forever): their ids are free
--- again, so an honest client reusing one is never a DuplicateCall. No reply. Returns true if any.
 local function expireQueued(ps: PlayerState, now: number): boolean
 	local any = false
 	local q = ps.queue
@@ -784,8 +722,6 @@ local function sweepPlayer(ps: PlayerState, now: number)
 	end
 end
 
--- Zombies whose thread died without reaching finish (cancelled by their own code): released, so
--- they stop blocking their route (and a Serial route's queue).
 local function sweepZombies()
 	local n = 0
 	for token, rec in zombieRecs do
@@ -808,8 +744,6 @@ local function sweepZombies()
 	end
 end
 
--- Players who left with yielded calls: at each call's deadline (or when its thread died) the call is
--- forgotten, and a CancelOnTimeout thread is cancelled as it would have been for a player in the game.
 local function sweepDeparted(now: number)
 	for i = #departed, 1, -1 do
 		local ps = departed[i]
@@ -901,8 +835,6 @@ function Dispatch.admit(ps: PlayerState, route: Route): number
 	return RUN
 end
 
--- Section 4.11 accept (after a successful decode). argv[1..n] are the arguments; the caller clears
--- argv afterwards.
 function Dispatch.accept(
 	ps: PlayerState,
 	route: Route,
@@ -974,8 +906,6 @@ function Dispatch.sweep(now: number): ()
 	end
 end
 
--- Repeat HELLO: queued calls are dropped (a Serial route held only by a queued entry is freed);
--- running calls are abandoned as by the watchdog.
 function Dispatch.abandonAll(ps: PlayerState): ()
 	for _, e in ps.queue do
 		dropEntry(ps, e)
@@ -1007,8 +937,6 @@ function Dispatch.abandonAll(ps: PlayerState): ()
 	end
 end
 
--- A player left (ps.gone is already set): queued calls are dropped; running ones finish without a
--- reply. Yielded calls stay watched until their deadline, so CancelOnTimeout still cancels them.
 function Dispatch.onLeave(ps: PlayerState): ()
 	table.clear(ps.queue)
 	ps.queued = 0

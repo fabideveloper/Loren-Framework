@@ -1,10 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	RawClient: client side of the raw baseline. RawClient.connect() returns proxies shaped like
-	Loren's (proxy:Method(...) -> Promise, proxy.Signals.Name:Connect/Once), so bots and specs
-	run unchanged. Keeps nil holes (explicit argument counts); 10 s timeout like 1.5.1.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

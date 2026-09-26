@@ -1,7 +1,4 @@
 --!strict
--- 2.0 call dispatch on the server: returned Promises, Loren.Reject, InternalError (log + incident +
--- OnError), running/queue caps, zombies, Serial and the watchdog with CancelOnTimeout. The calls come
--- from specs/v2/client; this side checks what only the server can see.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

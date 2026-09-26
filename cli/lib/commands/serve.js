@@ -6,8 +6,6 @@ const { serveCommand: serveCmdLine } = require('../lanes');
 const { toolLabel, isScriptSyncTool } = require('../toolchain');
 const { describeFailure } = require('../run');
 
-// loren serve (alias: ignite): runs `rojo serve` / `argon serve` in the foreground with its
-// output shown, and exits with the tool's status (dx-30). Script Sync: a note, exit 0.
 async function serveCommand(ctx, opts = {}) {
 	const root = requireProject(ctx.cwd);
 	const tool = await resolveProjectTool(ctx, root, opts.tool);

@@ -1,8 +1,4 @@
 --!strict
--- Unit specs for LorenRuntime.Schema (schema lane; IMPLEMENTATION.md §3.6, §4.8, §10): the T catalogue and its
--- refinements, Loren.Method/Event/Signal parsing, the boot check, typed round trips on both sides, sender and
--- receiver validation, and decode fuzzing (random buffers, every truncation). Runs on the server, no players,
--- no global runtime state (Schema is pure).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local C = require(ReplicatedStorage.LorenRuntime.Constants)
 local Codec = require(ReplicatedStorage.LorenRuntime.Codec)
@@ -19,8 +15,6 @@ local function codec(descs: { any }?, allowNonFinite: boolean?): any
 	return Schema.compile(descs :: any, allowNonFinite == true, C.Limit.MAX_ARGS_C2S, false)
 end
 
--- One payload. c2s = true: the client writer (indexed refs); false: the server writer (sequential refs).
--- Returns (status, exact bytes, refs, nrefs, errArg).
 local function encode(pc: any, c2s: boolean, ...: any): (number, buffer, { any }, number, number)
 	local w = Codec.newWriter(16, c2s)
 	local st = pc.encode(w, select("#", ...), ...)
@@ -29,8 +23,6 @@ local function encode(pc: any, c2s: boolean, ...: any): (number, buffer, { any }
 	return st, out, table.move(w.refs, 1, w.nrefs, 1, {}), w.nrefs, w.errArg
 end
 
--- Decodes b[0, lim) as the server (hostile = true: indexed refs, the sidecar walked first, as Transport does)
--- or as the client. Returns (ctx, n, next offset, argv).
 local function decode(
 	pc: any,
 	hostile: boolean,

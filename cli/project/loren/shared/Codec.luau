@@ -1,18 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Codec (lane: codec). Growable Writer, LEB128 varints, route heads, untyped tagged values, the
-	sender's sidecar copy and the server's sidecar walk. Spec: design/loren-2.0/IMPLEMENTATION.md
-	§3.5 (rules), §4.3 (heads), §4.5 (tags).
-
-	Pure: requiring it creates nothing. The only module state is reused scratch (the cycle set of the
-	encoder and the explicit stack of the sidecar walk), always left empty between calls.
-
-	Decoders never throw on malformed input. A failure sets ctx.err (Constants.Decode; first failure
-	wins, except that a structural failure replaces a MISSING_INSTANCE recorded earlier in an S->C
-	message) and returns. Encoders return Constants.Encode statuses and run no user code (next, rawget
-	and rawlen only; never __iter/__len/__index), so the shared scratch writer is never re-entered.
-]]
 
 local C = require(script.Parent.Constants)
 local Types = require(script.Parent.Types)
@@ -20,8 +7,6 @@ local Types = require(script.Parent.Types)
 type Writer = Types.Writer
 type ReadCtx = Types.ReadCtx
 
--- Tags and limits as literals so hot-path comparisons compile to constants; checked against
--- Constants below.
 local T_NIL = 0x00
 local T_FALSE = 0x01
 local T_TRUE = 0x02
@@ -110,8 +95,6 @@ local D_TOO_MANY_NODES = C.Decode.TOO_MANY_NODES
 local D_BAD_KEY = C.Decode.BAD_KEY
 local D_TOO_MANY_ARGS = C.Decode.TOO_MANY_ARGS
 
--- Scratch. `visiting` holds the tables on the current encode path (cycle detection); every level
--- removes its own mark on every return path. walkT/walkD are the sidecar walk's explicit stack.
 local visiting: { [any]: boolean } = {}
 local walkT: { any } = {}
 local walkD: { number } = {}
@@ -251,8 +234,6 @@ local function writeVarint(w: Writer, v: number)
 	putVarint(w.buf, o, v)
 end
 
--- (value, next offset), or (-1, o) when truncated at lim or when the 3rd byte has 0x80 set.
--- Non-minimal forms are accepted.
 @native
 local function readVarint(b: buffer, o: number, lim: number): (number, number)
 	if o >= lim then
@@ -336,8 +317,6 @@ end
 
 -- [[ Encode ]] -------------------------------------------------------------------------------------
 
--- Appends v to the sidecar (v may be nil). C->S also writes the frame-absolute varint index. Counts 1
--- node. Does not write a tag: typed Instance fields call it directly, writeValue writes REF first.
 local function addRef(w: Writer, v: any)
 	local n = w.nrefs + 1
 	w.nrefs = n
@@ -406,8 +385,6 @@ local function writeBuf(w: Writer, src: buffer)
 	end
 end
 
--- REF tag + sidecar slot. A C->S message can never hold more than MAX_REFS refs (the frame header's
--- nrefs is a u8), so the 256th ref of one message fails here instead of producing an unsendable frame.
 local function writeRef(w: Writer, v: any): number
 	local indexed = w.indexedRefs
 	if indexed and w.nrefs >= MAX_REFS then
@@ -422,9 +399,6 @@ local function writeRef(w: Writer, v: any): number
 	return 0
 end
 
--- Deep copy of t (at `depth` inside the sidecar; values inside are depth + 1) for the sidecar.
--- Node rule: every kept value counts 1 node (w.nodes); string keys and string values count their
--- bytes (w.sideBytes). cs = C->S rules (buffers, keys, the node cap).
 local function copyRec(w: Writer, t: { [any]: any }, depth: number, cs: boolean): (any, number)
 	if visiting[t] then
 		return nil, E_CYCLE
@@ -495,14 +469,10 @@ local function copyRec(w: Writer, t: { [any]: any }, depth: number, cs: boolean)
 	return out, 0
 end
 
--- Sidecar deep copy for the sender: (copy, C.Encode status). depth = t's depth inside the sidecar
--- (writeValue passes 0: the server's walkSidecar counts depth from each ref, not from the message).
 local function copyTable(w: Writer, t: { [any]: any }, depth: number): (any, number)
 	return copyRec(w, t, depth, w.indexedRefs)
 end
 
--- One tagged value (§4.5). Returns a C.Encode status; on failure the message is partial and the
--- caller discards it (resetWriter).
 @native
 local function writeValue(w: Writer, v: any, depth: number): number
 	if depth > MAX_DEPTH then
@@ -523,11 +493,6 @@ local function writeValue(w: Writer, v: any, depth: number): number
 		end
 		local b = w.buf
 		if v >= 0 then
-			-- `v % 1 == 0` is false for NaN and inf. -0 passes it (and v >= 0), so it is excluded here
-			-- (1 / -0 is -inf) and falls through to F64, which keeps its sign. The engine flushes
-			-- subnormal results to zero, so `5e-324 % 1 == 0` is true there: a non-zero fixint must also
-			-- be >= 1 (and a negative integer <= -1, below), which sends subnormals of either sign as F64
-			-- (§3.5 "otherwise F64 (exact)").
 			if v <= 127 and v % 1 == 0 and (v >= 1 or (v == 0 and 1 / v > 0)) then
 				buffer.writeu8(b, n, T_FIXINT + v)
 				w.n = n + 1
@@ -578,8 +543,6 @@ local function writeValue(w: Writer, v: any, depth: number): number
 			return E_CYCLE
 		end
 		if w.inlineTables and getmetatable(v) == nil then
-			-- Classify with one raw pass: a plain array (keys exactly 1..rawlen) or a string map, with no
-			-- function/thread values (NIL is never valid inside ARRAY/MAP, so such tables use the sidecar).
 			local len = rawlen(v)
 			local count = 0
 			local arr = true
@@ -738,8 +701,6 @@ end
 
 -- [[ Decode ]] -------------------------------------------------------------------------------------
 
--- First failure wins, except that a failure after a MISSING_INSTANCE (S->C only: recorded, then the
--- message is decoded to its end) replaces it, so a corrupt stream still aborts the frame.
 local function fail(ctx: ReadCtx, code: number)
 	local e = ctx.err
 	if e == 0 or e == D_MISSING_INSTANCE then
@@ -752,10 +713,6 @@ local function failVarint(ctx: ReadCtx, o: number, lim: number)
 	fail(ctx, if lim - o >= 3 then D_BAD_VARINT else D_OVERRUN)
 end
 
--- One tagged value from b[o, lim). Returns (value, next offset); on failure (nil, offset <= lim) with
--- ctx.err set. Hostile (server): depth, node, finite and REF-flag rules. Non-hostile (client): only
--- structural failures; nesting beyond MAX_DEPTH (which no honest encoder writes) is BAD_TAG, so a
--- corrupt stream cannot recurse without bound.
 @native
 local function readValue(b: buffer, o: number, lim: number, ctx: ReadCtx, depth: number): (any, number)
 	local hostile = ctx.hostile
@@ -843,8 +800,6 @@ local function readValue(b: buffer, o: number, lim: number, ctx: ReadCtx, depth:
 			return nil, p
 		end
 		if hostile then
-			-- Every element counts one node. Claims add up per message, so nested headers cannot all
-			-- preallocate against the same remaining bytes (an honest message claims <= its nodes).
 			local claimed = ctx.claimed + count
 			if nodes + count > MAX_NODES or claimed > MAX_NODES then
 				fail(ctx, D_TOO_MANY_NODES)
@@ -941,8 +896,6 @@ local function readValue(b: buffer, o: number, lim: number, ctx: ReadCtx, depth:
 				return nil, p
 			end
 			if hostile then
-				-- One reference per slot: a reused index would deliver the same (byte-charged once)
-				-- sidecar value again and again. Honest encoders never reuse one.
 				local flags = ctx.refFlags
 				local f = flags[idx + 1] or 0
 				if f >= REF_USED then
@@ -1062,9 +1015,6 @@ local function readValue(b: buffer, o: number, lim: number, ctx: ReadCtx, depth:
 	return nil, o
 end
 
--- argc:u8 + argc values into argv[1..argc]. Returns (number of argv slots written, next offset); on
--- failure ctx.err is set, ctx.errArg names the argument (TOO_MANY_ARGS: max + 1) and the count
--- covers only the slots written, so the caller can clear exactly those.
 @native
 local function readArgs(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }, max: number): (number, number)
 	if o >= lim then
@@ -1109,8 +1059,6 @@ local function finVector3(v: any): boolean
 	return fin(v.X) and fin(v.Y) and fin(v.Z)
 end
 
--- false when a datatype listed in §3.5 walkSidecar has a non-finite component. Unlisted datatypes
--- pass (handlers validate them).
 local function datatypeFinite(v: any): boolean
 	local ty = typeof(v)
 	if ty == "Instance" or ty == "EnumItem" then
@@ -1174,11 +1122,6 @@ local function datatypeFinite(v: any): boolean
 	return true
 end
 
--- Validates the sidecar of one C->S frame before any message is read (after admission). Returns
--- (C.Decode status, byte cost = NODE_CHARGE * nodes + string bytes); any non-zero status is a Sidecar
--- violation. Sets ctx.refFlags[i] = 1 when ref i holds a non-finite number or datatype component.
--- The walk is iterative (explicit stack) and bounded by MAX_NODES: every table visited was counted as
--- a node, so neither huge nor deeply nested input can make it recurse or loop without bound.
 @native
 local function walkSidecar(refs: { any }, nrefs: number, ctx: ReadCtx): (number, number)
 	local flags = ctx.refFlags
@@ -1293,8 +1236,6 @@ local function newReadCtx(hostile: boolean, indexed: boolean): ReadCtx
 	}
 end
 
--- Per frame: clears the previous frame's ref flags (non-finite and used bits). S->C passes
--- nrefs = 0 (unused; refs are consumed in order).
 local function beginFrame(ctx: ReadCtx, refs: { any }?, nrefs: number)
 	local flags = ctx.refFlags
 	for i = 1, ctx.nrefs do

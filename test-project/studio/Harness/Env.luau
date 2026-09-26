@@ -1,16 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Env: shared state for the Studio test harness (one copy per VM: the server has one, each client has one).
-
-	The harness scripts fill it after boot; specs and bots read it.
-		Env.runtime        "2.0" | "1.5.1" | "raw"   (auto-detected, see detectRuntime; confirmed by adopt)
-		Env.Loren          the Loren module (nil on raw)
-		Env.boot           { ok, error, ms } of Loren:SetOnFire() on this side
-		Env.proxies        client: service name -> proxy (from TestController.Dependencies, or RawClient)
-		Env.services       server: service name -> service module (fixtures, or nil on raw)
-		Env.controller     client: the TestController module
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -50,8 +39,6 @@ Env.isServer = RunService:IsServer()
 -- In Studio Run mode IsClient() is also true on the server; the harness only means a real client.
 Env.isClient = RunService:IsClient() and not RunService:IsServer()
 
--- 2.0 if ReplicatedStorage has LorenRuntime, 1.5.1 if LorenBridge exists (or, before the 1.5.1 server
--- has booted, if ReplicatedStorage.Shared.Loren exists), otherwise raw.
 function Env.detectRuntime(): string
 	if ReplicatedStorage:FindFirstChild("LorenRuntime") then
 		return "2.0"
@@ -89,9 +76,6 @@ function Env.versionOf(loren: any): string?
 	return if ok and typeof(version) == "string" then version else nil
 end
 
--- Called once Shared.Loren has loaded. The folder check above only proves that LorenRuntime is
--- mapped; until the 3-line shim replaces Shared.Loren, the module actually running is 1.5.1, and
--- the specs must treat it as such.
 function Env.adopt(loren: any)
 	Env.Loren = loren
 	if not Env.is20 then

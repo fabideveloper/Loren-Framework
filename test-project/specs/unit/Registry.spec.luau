@@ -1,13 +1,4 @@
 --!strict
--- Registry (lifecycle): AddServices/AddControllers, load problems, declaration validation (errors vs
--- warnings, the full section 3.9 list), colon-style middleware, orphan keys, reserved names,
--- Recursive, duplicates, reports, suggestions and Dependencies maps. IMPLEMENTATION.md sections 3.9
--- and 8.4. Runs on the server.
---
--- ModuleScripts are made at run time by cloning modules with a known result (a ModuleScript's
--- Source cannot be written by a script): LorenRuntime.Version returns a frozen table, a clone of
--- _fixtures/IntentionalLoadError fails to load, and a clone of this spec returns a function.
--- Declaration shapes use Registry._test.register with plain tables.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -42,8 +33,6 @@ return function(t: any)
 		return m
 	end
 
-	-- A ModuleScript whose require fails (_fixtures/IntentionalLoadError; its error in the Output is
-	-- expected).
 	local function brokenModule(name: string, parent: Instance): ModuleScript
 		local m = (script.Parent._fixtures.IntentionalLoadError :: ModuleScript):Clone()
 		m.Name = name
@@ -124,7 +113,7 @@ return function(t: any)
 			expect(rec.kind).toBe("Service")
 			expect(rec.instance).toBe(a)
 			expect(rec.path).toBe(a:GetFullName())
-			expect(rec.module.Version).toBe("2.0.0")
+			expect(rec.module.Version).toBe((require(Runtime:WaitForChild("Version")) :: any).Version)
 			expect(rec.deps).toEqual({})
 		end)
 

@@ -1,6 +1,4 @@
 --!strict
--- Errors (lifecycle): rejection strings for every code, frozen ErrorInfo, Loren.Reject detection,
--- 256-byte truncation and incident ids. IMPLEMENTATION.md sections 3.3 and 5. Runs on the server.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage:WaitForChild("LorenRuntime")

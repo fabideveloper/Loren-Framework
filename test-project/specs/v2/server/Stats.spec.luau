@@ -1,6 +1,4 @@
 --!strict
--- 2.0 GetStats on the server: a fresh, complete Types.Stats record, live counters from the clients'
--- traffic, and no violations or dropped frames from honest clients. Also OnViolation registration.
 local Players = game:GetService("Players")
 
 local V2 = require(script.Parent._V2)

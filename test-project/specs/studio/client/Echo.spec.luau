@@ -87,9 +87,6 @@ return function(t: any)
 			end
 		end)
 
-		-- 1.5.1 bug net:arch-04 / sec-15: the client packs arguments with {...} and table.unpack
-		-- without a count, so a trailing nil after a hole can drop later arguments. Fixed in 2.0.
-		-- Belongs in specs/v2 once the integration phase moves it there.
 		it("keeps arguments after a nil hole", function()
 			local r = echo(1, nil, 3, nil)
 			expect(r[1]).toBe(true)

@@ -18,8 +18,6 @@ async function refreshCommand(ctx, opts = {}) {
 	return watchProject(ctx, root, tool);
 }
 
-// loren refresh --watch (dx-29): regenerates the types when a Service or Controller changes, and
-// the sourcemap too when files are added, removed or renamed. Runs until Ctrl+C (or `signal`).
 function watchProject(ctx, root, tool, { debounceMs = 300, signal = null } = {}) {
 	const paths = projectPaths(root);
 	const dirs = [paths.services, paths.controllers].filter(isDir);

@@ -1,11 +1,4 @@
 --!strict
---[[
-	Helpers for specs/v2/client (not a spec: the runner only collects "*.spec" modules).
-
-	Client specs test through the public API: the Loren facade, the V2Service proxy and V2Controller.
-	Several clients run these specs at once, and Signals.Hit broadcasts ("hitExcept") reach every
-	other client, so every check filters deliveries by a tag unique to this client and call.
-]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -72,10 +65,6 @@ function V2.rejectedNow(promise: any): boolean
 	return promise:getStatus() == "Rejected"
 end
 
---[[
-	Checks a settled rejection { false, message, info } for `code` (a Constants.ErrName) and
-	returns (message, info). info must be frozen and consistent with the message.
-]]
 function V2.rejection(expect: any, result: { n: number, [number]: any }, code: string, member: string?): (string, any)
 	expect(result[1]).toBe(false)
 	local message, info = result[2], result[3]

@@ -1,7 +1,5 @@
 --!strict
 --!optimize 2
--- LorenServer index (owner lane: lifecycle): ServerScriptService.LorenServer, required lazily by the
--- facade on the server only. Returns the frozen table of server modules (IMPLEMENTATION.md section 2).
 
 return table.freeze({
 	Transport = require(script.Transport),

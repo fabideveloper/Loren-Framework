@@ -18,9 +18,6 @@ return function(t: any)
 			expect(value).toBe(true)
 		end)
 
-		-- Strictly increasing overall; the last 8 (live) Ticks consecutive. 2.0 may first replay a
-		-- capped backlog of Ticks fired before the first Connect (BLUEPRINT section 4), which can leave
-		-- one gap between the replay and the live stream; 1.5.1 simply drops those.
 		it("Tick (FireAll) arrives in index order, live Ticks without gaps", function()
 			local seen: { { index: any, clock: any, serverTime: any } } = {}
 			local connection = Broadcast.Signals.Tick:Connect(function(index: any, clock: any, serverTime: any)

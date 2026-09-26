@@ -1,15 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Burst: fires `size` calls in a single frame every `interval` seconds and measures how long each
-	burst takes to settle (last reply of the burst), plus per-call latency and outcomes.
-
-		local bot = Burst.new(proxies, { size = 60, interval = 2, payloadSize = 64 })
-		bot:start() ... bot:stop(); bot:waitIdle(12); bot:summary()
-
-	A burst larger than 1.5.1's 50 calls/s window loses the excess to silent drops (10 s Timeouts);
-	2.0 should serve it or reject the excess fast with RateLimited.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

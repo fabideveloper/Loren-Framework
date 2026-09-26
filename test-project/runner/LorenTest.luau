@@ -1,27 +1,4 @@
 --!strict
---[[
-	LorenTest: a small spec runner that runs inside real Roblox Studio (server or client).
-
-	A spec is a ModuleScript named "<Name>.spec" (file <Name>.spec.luau) that returns `function(t)`.
-
-		t.describe(name, fn)                  group tests; fn runs at collection time and must not yield
-		t.it(name, fn, opts?)                 opts = { timeout = seconds (default 10), skip = boolean }
-		t.beforeAll / afterAll / beforeEach / afterEach(fn)
-		t.expect(v).toBe(x)                   also toEqual (deep), toBeNil, toBeTruthy, toBeFalsy,
-		                                      toThrow(pattern?), toBeCloseTo(x, digits?), toBeGreaterThan(OrEqual),
-		                                      toBeLessThan(OrEqual), toContain, toHaveLength; prefix `.never`
-		t.spy(fn?)                            callable table with .calls (packed args), .count and .fn
-		                                      (.fn is a plain function, for APIs that need a real function)
-
-	`it` bodies and hooks may yield. Each one runs in its own thread with a timeout; a timed-out
-	thread is abandoned (never resumed by the runner). An error in a hook fails the affected tests
-	and the run continues.
-
-		LorenTest.collect(container, prefix?) -> { Spec }   requires every "*.spec" ModuleScript under
-		                                                     container; names starting with "_" are skipped
-		LorenTest.run(specs, opts?) -> Results               opts = { label?, timeout?, hookTimeout?, filter? }
-		LorenTest.report(results) -> string
-]]
 
 local LorenTest = {}
 
@@ -394,8 +371,6 @@ local function runWithTimeout(fn: () -> (), timeout: number): string?
 	local failure: string? = nil
 	local timer: thread? = nil
 
-	-- The caller is resumed with task.defer (not task.spawn) so a finishing worker never runs the
-	-- rest of the suite nested inside its own resume.
 	local worker = coroutine.create(function()
 		local ok, err = xpcall(fn :: any, captureError)
 		if finished then
@@ -582,8 +557,6 @@ local function countTests(suite: SuiteNode, state: RunState, path: string): numb
 	return n
 end
 
--- Counts skipped tests and fails every runnable test in the subtree with `message`
--- (message = nil: only count the skips; used when nothing in the subtree is runnable).
 local function settleSubtree(suite: SuiteNode, state: RunState, path: string, message: string?)
 	for _, child in suite.children do
 		local childPath = path .. " > " .. child.name

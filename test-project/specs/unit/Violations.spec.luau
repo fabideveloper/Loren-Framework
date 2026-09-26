@@ -1,7 +1,4 @@
 --!strict
--- Unit spec: LorenServer.Violations (limiter lane). Runs on the server in Studio (Run mode or Play).
--- Players are fakes ({ UserId, Kick }); every Violations function takes `now`, and Log runs on a
--- fake clock with captured output, so every result is deterministic.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 

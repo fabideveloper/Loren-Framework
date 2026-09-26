@@ -228,8 +228,6 @@ return function(t: any)
 			end
 			expect(names).toEqual({ "fx/Good.spec", "fx/LoadError.spec", "fx/NotAFunction.spec", "fx/nested/Deep.spec" })
 			expect(specs[1].fn).never.toBeNil()
-			-- Roblox may replace a module's own error with "Requested module experienced an error
-			-- while loading", so only the runner's prefix is asserted.
 			expect(specs[2].loadError).toContain("failed to load")
 			expect(specs[3].loadError).toContain("must return function")
 

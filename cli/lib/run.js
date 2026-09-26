@@ -2,10 +2,6 @@
 
 const { spawnSync } = require('child_process');
 
-// Runs an executable without a shell (arguments are never re-parsed) and returns the
-// spawnSync result plus `ok` (exit status 0, no spawn error). Rokit, Aftman, Foreman,
-// Rojo and Argon all install real executables, so no shell is needed on Windows either.
-// opts: { cwd, stdio: 'pipe' | 'inherit' | array, input }
 function run(cmd, args = [], opts = {}) {
 	const result = spawnSync(cmd, args, {
 		cwd: opts.cwd,

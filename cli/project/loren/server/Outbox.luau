@@ -1,26 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Outbox (owner lane: server-net): player states, the reliable and unreliable channels, the
-	pre-HELLO outbox, OK/ERR/NOTICE messages and the per-frame flush.
-	Spec: design/loren-2.0/IMPLEMENTATION.md sections 3.16 (PlayerState, Send path, Flush), 4.2, 4.4,
-	4.10 (onHello) and 9.
-
-	- Every S->C message is encoded once into the shared scratch writer (Outbox.begin) and then
-	  committed: its bytes are copied (buffer.copy) and its refs moved (table.move) into the player's
-	  channel, and its boundary (byte start, ref start, callId) is recorded. A broadcast commits the
-	  same scratch to every target, so it costs one encode plus N copies.
-	- Before HELLO the reliable channel is the outbox (OUTBOX_BYTES / OUTBOX_MSGS, OUTBOX_TTL after
-	  join); unreliable messages are dropped. OK, ERR and NOTICE are never written before HELLO. The
-	  HELLO puts MANIFEST (and a NOTICE OutboxOverflow) in front of everything already queued.
-	- flushAll (Transport's parked flush thread, once per server frame; also Loren.Flush) swaps the
-	  dirty list first, then flushes each helloed player under its own pcall: pending NOTICE runs,
-	  frames sealed at S2C_SEAL (a larger message goes alone), each an exact-size copy plus a refs
-	  slice. Every frame is staged before the channel is reset, and the channel is reset before the
-	  first FireClient. A fire that errors is retried one message at a time; only the failing message
-	  is lost, and an OK or a data-carrying ERR in it becomes a plain ERR BadResult in the next flush.
-	- Requiring this module has no side effects (a buffer is not an Instance).
-]]
 
 local PlayersService = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -38,8 +17,6 @@ local Violations = require(script.Parent.Violations)
 type Writer = Types.Writer
 type PayloadCodec = Types.PayloadCodec
 
--- One network member of one service (built and frozen by Routes; defined here because every
--- server-net module needs it and Outbox is the lowest of them in the require graph).
 export type Route = {
 	id: number,
 	kind: number, -- C.Kind
@@ -195,8 +172,6 @@ local writeValue = Codec.writeValue
 -- Module state (restored by _reset) ----------------------------------------------------------------
 
 local states: { [any]: PlayerState } = {} -- Player -> state
--- Players that left (weak keys). A PlayerRemoving listener that runs after Loren's may still Fire to
--- the leaving Player (Parent is still Players then); adopt must not re-create its state.
 local departedSet: { [any]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 local list: { PlayerState } = {} -- dense; identity kept for the module's lifetime
 local dirty: { PlayerState } = {}
@@ -266,9 +241,6 @@ local function markDirty(ps: PlayerState)
 	end
 end
 
--- Appends the scratch message `w` to the player's reliable channel and records its boundary.
--- callId: > 0 for OK and data-carrying ERR, -callId for a plain ERR, 0 otherwise. The caller has
--- already applied the HELLO/outbox rules.
 @native
 local function commit(ps: PlayerState, w: Writer, callId: number): ()
 	local ch = ps.out
@@ -371,8 +343,6 @@ local function queueEarly(ps: PlayerState, w: Writer)
 	commit(ps, w, 0)
 end
 
--- The scratch writer, reset for a new message. A buffer grown past SCRATCH_KEEP by an earlier
--- (large) message is dropped here, so one big Fire does not pin its memory for the server's lifetime.
 local function takeScratch(): Writer
 	local w = scratch
 	if w.cap > SCRATCH_KEEP then
@@ -435,8 +405,6 @@ local function lossyHint(route: Route)
 	)
 end
 
--- OK: callId + returns payload. Returns (C.Encode status, argument index); on failure nothing is
--- written and the caller replies BadResult.
 function Outbox.sendOk(ps: PlayerState, route: Route, callId: number, n: number, ...: any): (number, number)
 	if ps.gone or not ps.helloed then
 		return 0, 0
@@ -462,8 +430,6 @@ function Outbox.sendOk(ps: PlayerState, route: Route, callId: number, n: number,
 	return 0, 0
 end
 
--- ERR: callId code flags [msg] [data] [incident]. Returns a C.Encode status (only `data` can fail;
--- nothing is written then).
 function Outbox.sendErr(
 	ps: PlayerState,
 	callId: number,
@@ -520,8 +486,6 @@ function Outbox.notice(ps: PlayerState, kind: number, first: number, count: numb
 	markDirty(ps)
 end
 
--- A C->S frame of this channel was refused at admission: extends or opens a FrameDropped run
--- (at most NOTICE_RUNS_MAX per channel per flush; further runs are not reported).
 function Outbox.recordDrop(ps: PlayerState, unreliable: boolean, seq: number): ()
 	if ps.gone or not ps.helloed then
 		return
@@ -545,8 +509,6 @@ function Outbox.recordDrop(ps: PlayerState, unreliable: boolean, seq: number): (
 	end
 end
 
--- Removes OK/ERR messages still in the channel (repeat HELLO: the restarted client has no pending
--- call with those ids, and an unknown id would abort the rest of its frame).
 local function purgeReplies(ch: Channel)
 	local nm = ch.nmsg
 	if nm == 0 then
@@ -628,15 +590,10 @@ local function prependManifest(ch: Channel, manifestMsg: buffer, dropped: number
 	messagesOut += k
 end
 
--- An accepted HELLO (section 4.10 onHello; Transport has checked REHELLO_MIN and abandoned the
--- calls of a repeat HELLO): MANIFEST, then NOTICE OutboxOverflow if messages were dropped before
--- HELLO, then everything already queued (bytes and refs in order).
 function Outbox.hello(ps: PlayerState, manifestMsg: buffer, now: number): ()
 	if ps.gone then
 		return
 	end
-	-- A first HELLO later than OUTBOX_TTL after join: the outbox has expired even if no message or
-	-- flush has noticed it yet (its messages count in the OutboxOverflow NOTICE).
 	if not ps.helloed and not ps.outboxExpired and now - ps.joinedAt > OUTBOX_TTL then
 		expire(ps)
 	end
@@ -746,9 +703,6 @@ local function retryFrame(
 	end
 end
 
--- Large buffers that stay mostly empty for SHRINK_AFTER flushes drop to max(1 KiB, 2 x use).
--- A buffer grown past SCRATCH_KEEP (a burst far above one frame) is replaced at once: the player may
--- go quiet and never flush again. Called right after the channel was reset (its bytes are staged).
 local function shrinkIfIdle(ch: Channel, used: number)
 	local cw = ch.w
 	if cw.cap > SCRATCH_KEEP and cw.n == 0 then
@@ -819,8 +773,6 @@ local function flushReliable(ps: PlayerState)
 		i = j + 1
 	end
 
-	-- 2. Reset the channel before any fire. The boundary arrays become the spare set, so the retry
-	--    path below keeps reading them even if something commits to this player meanwhile.
 	ch.starts, ch.spareStarts = ch.spareStarts, starts
 	ch.refStarts, ch.spareRefStarts = ch.spareRefStarts, refStarts
 	ch.callIds, ch.spareCallIds = ch.spareCallIds, callIds
@@ -1047,10 +999,6 @@ function Outbox.get(player: any): PlayerState?
 	return states[player]
 end
 
--- A Player in the game whose PlayerAdded has not reached Loren yet (deferred events: a listener
--- connected before the boot runs first and may Fire to it). Online only; the later PlayerAdded finds
--- the same state. nil for a Player who is not (or no longer) in Players, or whose leave Loren has
--- already processed (a later PlayerRemoving listener firing to it would otherwise leak a state).
 function Outbox.adopt(player: Player): PlayerState?
 	local existing = states[player]
 	if existing ~= nil then
@@ -1117,8 +1065,6 @@ function Outbox._reset(): ()
 end
 
 Outbox._test = table.freeze({
-	-- Replaces FireClient on both remotes: fn(channel "Reliable" | "Unreliable", player, frame, refs?).
-	-- A capture that errors makes that fire fail (per-message retry path). nil restores the remotes.
 	capture = function(fn: FireCapture?)
 		capture = fn
 	end,

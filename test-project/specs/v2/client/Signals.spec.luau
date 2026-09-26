@@ -1,7 +1,4 @@
 --!strict
--- 2.0 Signals on the client: ClientSignal objects (Connect side only), Wait / Once / DisconnectAll,
--- Disconnect in both forms, FireFor and FireExcept deliveries, the unreliable typed Stream.
--- Other clients' "hitExcept" requests reach this client too, so deliveries are filtered by tag.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

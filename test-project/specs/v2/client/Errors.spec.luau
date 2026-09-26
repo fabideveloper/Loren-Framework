@@ -1,7 +1,4 @@
 --!strict
--- 2.0 error model on the client: every code reachable from an honest client rejects with
--- (message, info), info frozen and consistent (IMPLEMENTATION.md section 5). ShuttingDown, NotReady
--- and BootFailed cannot be reached from a booted client through proxies (skipped with the reason).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local V2 = require(script.Parent._V2)

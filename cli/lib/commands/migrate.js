@@ -22,9 +22,6 @@ const {
 	installToolchain,
 } = require('../toolchain');
 
-// loren migrate [--to rojo|argon]: switches the toolchain manifests, the Luau-LSP settings and the
-// sourcemap between Rojo and Argon. The tool install runs with its output shown (crit-06), and
-// success is printed only when the new tool runs and the sourcemap was rebuilt with it.
 async function migrateCommand(ctx, opts = {}) {
 	const root = requireProject(ctx.cwd);
 	// Roblox Script Sync uses another folder layout and no project file: not automated (yet).

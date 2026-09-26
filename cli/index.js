@@ -4,7 +4,7 @@
 const path = require('path');
 const { Command, Option, CommanderError } = require('commander');
 const pkg = require('./package.json');
-const { PACKAGE_PROJECT_DIR, DOCS_URL, MIN_NODE, PREFIX } = require('./lib/constants');
+const { PACKAGE_PROJECT_DIR, DOCS_URL, MIN_NODE, PREFIX, CLI_INSTALL } = require('./lib/constants');
 const { createConsoleLogger } = require('./lib/log');
 const { detectTTY, createPrompter } = require('./lib/prompt');
 const { run } = require('./lib/run');
@@ -34,8 +34,6 @@ function createContext(o = {}) {
 		const toolLane = lanes.get('tool');
 		runner = toolLane && typeof toolLane.defaultRun === 'function' ? toolLane.defaultRun : run;
 	}
-	// update.js reads <packageRoot>/project; a template dir not named "project" leaves it to
-	// PACKAGE_PROJECT_DIR (which honours LOREN_TEMPLATE_DIR).
 	let packageRoot = o.packageRoot;
 	if (!packageRoot) packageRoot = path.basename(templateDir) === 'project' ? path.dirname(templateDir) : undefined;
 	return {
@@ -73,7 +71,7 @@ function buildProgram(ctx, state) {
 		.exitOverride()
 		.configureOutput({ writeOut: (s) => ctx.log.raw('out', s), writeErr: (s) => ctx.log.raw('err', s) })
 		.showHelpAfterError('(run loren --help for usage)')
-		.addHelpText('after', `\nDocs: ${DOCS_URL}\nUpdate the CLI itself: npm i -g loren-framework`);
+		.addHelpText('after', `\nDocs: ${DOCS_URL}\nUpdate the CLI itself: ${CLI_INSTALL}`);
 
 	// Runs a command and records its exit code; CliErrors become "Error: ..." and exit code 1.
 	const action =
@@ -144,10 +142,10 @@ function buildProgram(ctx, state) {
 
 	program
 		.command('update')
-		.summary("update this PROJECT's Loren runtime (the CLI itself: npm i -g loren-framework)")
+		.summary(`update this PROJECT's Loren runtime (the CLI itself: ${CLI_INSTALL})`)
 		.description(
 			"update this PROJECT's Loren runtime to the one bundled with this CLI (loren/, the shim, " +
-				'default.project.json, types, sourcemap, lint). To update the CLI itself: npm i -g loren-framework',
+				`default.project.json, types, sourcemap, lint). To update the CLI itself: ${CLI_INSTALL}`,
 		)
 		.option('--dry-run', 'show what would change; change nothing')
 		.option('-y, --yes', 'do not ask for confirmation')

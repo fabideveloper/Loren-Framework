@@ -7,8 +7,6 @@ const PREFIX = '(LORENঌ)';
 // The project file every command reads. Rojo and Argon both default to it.
 const PROJECT_FILE = 'default.project.json';
 
-// The scaffold shipped with this CLI (runtime, templates, premades, Promise).
-// LOREN_TEMPLATE_DIR points the CLI at another copy; the test suite uses it.
 const PACKAGE_PROJECT_DIR = process.env.LOREN_TEMPLATE_DIR
 	? path.resolve(process.env.LOREN_TEMPLATE_DIR)
 	: path.join(__dirname, '..', 'project');
@@ -35,9 +33,6 @@ const DEFAULT_PATHS = Object.freeze({
 	runtimeServer: 'loren/server',
 });
 
-// `--tool none`: Roblox Script Sync, built into Studio (lib/scriptsync.js). No project file:
-// .loren.json marks the project, and only Folders sync, so the runtime lives inside the synced
-// folders. Each directory is synced to the Studio Folder with the same path.
 const SCRIPT_SYNC = Object.freeze({ id: 'none', label: 'Roblox Script Sync', layout: 'scriptsync' });
 const LOREN_CONFIG_FILE = '.loren.json';
 const SCRIPT_SYNC_PATHS = Object.freeze({
@@ -61,10 +56,6 @@ const MANAGERS = Object.freeze(['rokit', 'aftman', 'foreman']);
 // The manifest each manager reads. Rokit and Aftman share one format; Foreman uses tables.
 const MANAGER_FILES = Object.freeze({ rokit: 'rokit.toml', aftman: 'aftman.toml', foreman: 'foreman.toml' });
 
-// ReplicatedStorage.Shared.Loren: the old require path, kept as a shim over the managed runtime.
-// `loren init` and `loren update` must write exactly this text. It finds the runtime next to itself
-// first (Script Sync keeps it in ReplicatedStorage.Shared), else ReplicatedStorage.LorenRuntime.
-// Byte-identical to project/src/shared/Loren.luau and IMPLEMENTATION.md section 1 (a test checks).
 const SHIM_SOURCE = [
 	'--!strict',
 	'--!optimize 2',
@@ -77,6 +68,10 @@ const SHIM_SOURCE = [
 
 // Keep in sync with package.json "engines". update-notifier (loaded lazily) needs 18.
 const MIN_NODE = '18.0.0';
+
+// While the CLI is a prerelease, npm's "latest" tag still points at the old major, so hints use "next".
+const CLI_VERSION = require('../package.json').version;
+const CLI_INSTALL = `npm i -g loren-framework${CLI_VERSION.includes('-') ? '@next' : ''}`;
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -107,8 +102,6 @@ const DOCS_URL = 'https://fabideveloper.github.io/Loren-Framework/';
 // The npm package root (holds package.json, index.js, lib/, project/).
 const PACKAGE_ROOT = path.join(__dirname, '..');
 
-// What `loren init` copies from the package's project/ folder. Anything else there
-// (loren_premade, the old aftman.toml, a stray sourcemap) stays out of new projects.
 const SCAFFOLD_ENTRIES = Object.freeze(['default.project.json', 'selene.toml', 'loren', 'loren_packages', 'src']);
 
 // Test code never reaches a user's place (crit-07): Rojo and Argon skip these under loren_packages.
@@ -135,8 +128,6 @@ const PREMADE_KINDS = Object.freeze({
 
 const PREMADE_DIR = 'loren_premade';
 
-// Premades that used the scaffold's Example* names. They are not shipped (package.json "files")
-// and `inject --list` hides them, so an inject can never collide with the scaffold (dx-25).
 const RETIRED_PREMADES = Object.freeze(['services/ExampleService.luau', 'controllers/ExampleController.luau']);
 
 // The single source for `loren make`: the scaffold's own examples (dx-33).
@@ -146,6 +137,8 @@ const MODULE_TEMPLATES = Object.freeze({
 });
 
 module.exports = {
+	CLI_VERSION,
+	CLI_INSTALL,
 	PACKAGE_ROOT,
 	SCAFFOLD_ENTRIES,
 	GLOB_IGNORE_PATHS,

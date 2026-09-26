@@ -1,7 +1,4 @@
 --!strict
--- Unit spec: LorenServer.Routes (server-net lane). Runs on the server in Studio (Run mode or Play).
--- Declarations are built by hand in the shape Registry.buildServices returns (Types.ServiceDecl), so
--- every numbering and option rule is checked without booting Loren.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 

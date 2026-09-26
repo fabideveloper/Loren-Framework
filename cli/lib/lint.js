@@ -1,20 +1,5 @@
 'use strict';
 
-// The source lint behind `loren doctor` and `loren update` (BLUEPRINT §6 and §8, CLI.md M4).
-// A small Luau tokenizer drops comments and strings, tracks brackets and blocks, and finds:
-//   colon-middleware  function X.Middleware:Name(...), Name = function(self, ...) inside a
-//                     `Middleware = {` table, and the explicit-self dot forms (a bare local named
-//                     Middleware only when the file assigns it to a module's Middleware). Fixable: the
-//                     rewrite to dot style drops self (':' becomes '.'); a function that uses self is
-//                     left to the user.
-//   reserved-name     a Client method named Server, Signals, ClientEvents, Properties or Try.
-//   orphan-middleware a Middleware key with no Client method or ClientEvent of that name.
-//   orphan-spec       a Spec key with no Client method, ClientEvent or Signal of that name.
-//   reserved-key      a Service key Spec or ClientEvents that does not look like the 2.0 key.
-// Everything except fixable colon middleware is a warning, as it is in the runtime's boot report.
-// The scan is best effort: whatever it cannot read statically (a Client table built at run time)
-// it skips instead of guessing.
-
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
@@ -121,8 +106,6 @@ const isIdentStart = (c) => /[A-Za-z_]/.test(c);
 const isIdentChar = (c) => /[A-Za-z0-9_]/.test(c);
 const isDigit = (c) => c >= '0' && c <= '9';
 
-// Tokens: { type: 'name'|'kw'|'num'|'str'|'op', value, start, end, line }. Comments are dropped.
-// A string token's `text` is its content for quoted and long strings (null for interpolated ones).
 function tokenize(src) {
 	const lineOf = lineLocator(src);
 	const toks = [];
@@ -212,8 +195,6 @@ const isKw = (t, v) => Boolean(t) && t.type === 'kw' && t.value === v;
 const isName = (t, v) => Boolean(t) && t.type === 'name' && (v === undefined || t.value === v);
 const isOpener = (t) => isOp(t, '(') || isOp(t, '{') || isOp(t, '[');
 
-// match[i]: the partner of a bracket, or the `end`/`until` of function/if/do/repeat (and back).
-// blk[i]: how many blocks are open at token i (0 = the top level of the file).
 function structure(toks) {
 	const n = toks.length;
 	const match = new Int32Array(n).fill(-1);
@@ -406,8 +387,6 @@ function interpExpressions(raw) {
 	return out;
 }
 
-// True when an interpolated string reads `self` (`{self.Name}`), nested interpolations included.
-// Conservative: any bare `self` counts.
 function interpUsesSelf(raw) {
 	for (const expr of interpExpressions(raw)) {
 		const toks = tokenize(expr);
@@ -436,10 +415,6 @@ function rhsUsesSelf(toks, S, k) {
 	return false;
 }
 
-// True when the function at `fi` reads `self` from its own parameters: in its body, in an
-// interpolated string, or in a parameter or return type (`typeof(self)`). Not from a nested
-// function that binds its own self, and not `x.self` or `{ self = ... }`. `skip` is the explicit
-// self parameter's token range ({ first, last }), which the rewrite removes.
 function bodyUsesSelf(toks, S, fi, paramsOpen, skip = null) {
 	const end = S.match[fi];
 	if (end < 0) return true; // no matching `end` (a syntax error): the body is unknown, so no auto-fix
@@ -456,8 +431,6 @@ function bodyUsesSelf(toks, S, fi, paramsOpen, skip = null) {
 			continue;
 		}
 		if (isKw(t, 'local')) {
-			// `local a, self = ...` directly in the body shadows it from here on. Inside a nested
-			// block it only shadows that block, so the scan goes on (a later `self` counts as a use).
 			let k = j + 1;
 			let shadows = false;
 			while (isName(toks[k]) || isOp(toks[k], ',')) {
@@ -611,8 +584,6 @@ function analyzeLuau(text, tokens) {
 	}
 	const isModule = (name) => info.moduleName === null || name === info.moduleName;
 
-	// Module tables: `local X = {` (with an optional type annotation) or `X = {` at the top level,
-	// and `return {`.
 	const moduleTables = [];
 	if (returnTable >= 0) moduleTables.push(returnTable);
 	for (let i = 0; i < toks.length; i++) {
@@ -705,8 +676,6 @@ function analyzeLuau(text, tokens) {
 	return info;
 }
 
-// End (exclusive) of the expression that starts at `start`: it stops where a new statement begins
-// (a name or keyword right after a complete operand, other than and/or).
 function statementEnd(toks, S, start) {
 	let j = start;
 	let needValue = true;
@@ -731,9 +700,6 @@ function statementEnd(toks, S, start) {
 	return j;
 }
 
-// True when a Service with this analysis is on the network (what the runtime calls `networked`):
-// Client methods, Signals, ClientEvents or a Spec. Unknown (built at run time) counts as networked.
-// Reserved Client names (Try, Signals...) are not networked by the runtime, so they do not count.
 function isNetworked(info) {
 	return (
 		info.client.methods.some((m) => !RESERVED.has(m.name)) ||
@@ -779,9 +745,6 @@ function preview(src, toks, from, pl, edit) {
 	return collapse(applyEdits(src.slice(start, end), [shifted]));
 }
 
-// A bare `Middleware` variable (`local Middleware = {}` + `function Middleware:Name(`) is only a
-// Service's middleware table when the file hands it over: `X.Middleware = Middleware` or
-// `{ Middleware = Middleware }`. Otherwise it may be the user's own class, whose methods need self.
 function handsOffMiddleware(toks) {
 	for (let i = 2; i < toks.length; i++) {
 		if (!isName(toks[i], 'Middleware') || !isOp(toks[i - 1], '=') || !isName(toks[i - 2], 'Middleware')) continue;
@@ -851,8 +814,6 @@ function colonIssues(src, toks, S, service) {
 			}
 			continue;
 		}
-		// Form C: Middleware = { Name = function(self, ...) } as a table field or X.Middleware; a
-		// `local Middleware = {` (or global) variable only when the file hands it to a module.
 		if (isName(t, 'Middleware') && isOp(toks[i + 1], '=') && isOp(toks[i + 2], '{') && !isOp(toks[i - 1], ':')) {
 			const p = toks[i - 1];
 			const field = isOp(p, '.') || isOp(p, '{') || isOp(p, ',') || isOp(p, ';');
@@ -979,9 +940,6 @@ function child(node, ...keys) {
 	return n === undefined ? null : n;
 }
 
-// Project-relative folders (shared, server, client, packages) from default.project.json's tree, with
-// the scaffold's defaults as fallback. `data` is the parsed project file; omitted, it is read from disk.
-// A Script Sync project (.loren.json) has fixed folders, plus the runtime folders inside them.
 function projectLayout(root, data) {
 	if (isScriptSync(root)) return { ...SCRIPT_SYNC_PATHS };
 	if (data === undefined) {
@@ -1014,8 +972,6 @@ function defaultIsTTY(env = process.env) {
 	return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
-// `confirm(question)` resolves true on an explicit yes. Questions carry no (y/N) hint: an injected
-// prompter (lib/prompt.js) adds its own, and so does this fallback. EOF or Ctrl+C answers no.
 function defaultConfirm(question) {
 	return new Promise((resolve) => {
 		const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -1063,8 +1019,6 @@ function backupFile(root, file, stamp) {
 	return target;
 }
 
-// Every .luau/.lua file under the given project-relative folders, once each, in a stable order.
-// Files under `skip` (project-relative folders, e.g. the runtime inside Script Sync's folders) are left out.
 function sourceFiles(root, dirs, skip = []) {
 	const seen = new Set();
 	const out = [];
@@ -1081,10 +1035,6 @@ function sourceFiles(root, dirs, skip = []) {
 	return out;
 }
 
-// Scans src/** (and the shared/server/client folders default.project.json maps, when they live
-// elsewhere), reports, and with `fix` offers the dot-style rewrite (backup first).
-// Service checks run on modules under the server folder.
-// exitCode: 0 = clean or only warnings left; 1 = fixable issues left; 2 = needs --yes (no TTY).
 async function runDoctor(root, opts = {}) {
 	const { fix = false, yes = false, isTTY = defaultIsTTY(), confirm = defaultConfirm, log: rawLog, now, legacy = false } = opts;
 	const layout = opts.srcDir && opts.serverDir ? null : projectLayout(root);

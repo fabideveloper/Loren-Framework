@@ -1,17 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Config (owner lane: lifecycle): Loren.Configure validation, defaults and freeze.
-	Spec: IMPLEMENTATION.md sections 3.4 and 6.
-
-	- `set` validates every key of the call first and changes nothing if one is bad (an error at the
-	  caller's line: unknown key, wrong type, out of range, NaN/inf, or a call after SetOnFire).
-	- Keys for the other side (server-only keys on a client, client-only keys on the server) are
-	  validated, then ignored with a one-time Studio warning.
-	- `get` returns one resolved table (defaults + set values) whose identity is stable until
-	  `_reset`; `freeze` (at SetOnFire) makes it and its Members read-only.
-	No side effects on require.
-]]
 
 local RunService = game:GetService("RunService")
 
@@ -28,8 +16,6 @@ local TIMEOUT_MIN = C.Limit.TIMEOUT_MIN
 local TIMEOUT_MAX = C.Limit.TIMEOUT_MAX
 local IS_SERVER = RunService:IsServer()
 
--- Cross-check floor: an honest client's heaviest frame costs at most ~69.6 KB at admission
--- (65 536 weight + 8 + 16 x 255 refs), so the client mirror of the byte burst must hold 128 KiB.
 local MIN_MIRRORED_BYTE_BURST = 131072
 
 type Rule = {
@@ -55,8 +41,6 @@ local function fraction(v: any): boolean
 	return finite(v) and v > 0 and v <= 1
 end
 
--- WatchdogGrace: the client quarantines a timed-out call id until send + timeout +
--- QUARANTINE_AFTER_DEADLINE, which must stay past the server's last reply (receipt + timeout + grace).
 local function graceSeconds(v: any): boolean
 	return finite(v) and v >= 0 and v <= C.Limit.WATCHDOG_GRACE_MAX
 end
@@ -125,6 +109,7 @@ local RULES: { [string]: Rule } = {
 	BacklogWindow = rule("S", integerIn(0, 255), "an integer number of seconds from 0 to 255"),
 	ForwardErrors = rule("S", oneOf("Studio", "Never", "Always"), '"Studio", "Never" or "Always"'),
 	StrictCycles = rule("B", boolean, BOOL),
+	CycleWarnings = rule("B", boolean, BOOL),
 	InlineTables = rule("B", boolean, BOOL),
 	MiddlewareArityCheck = rule("S", boolean, BOOL),
 	KickScore = rule("S", falseOrPositive, "false or a number > 0"),

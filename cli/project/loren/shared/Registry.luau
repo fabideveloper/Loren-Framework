@@ -1,20 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Registry (owner lane: lifecycle): AddServices/AddControllers, module records, declaration
-	validation, boot reports and the Dependencies maps.
-	Spec: IMPLEMENTATION.md sections 3.9, 8.4 and 11 (#1, #2, #3, #31, #34, #38); robust.md section 5.2.
-
-	- `add` requires each ModuleScript at registration (as 1.5.1 did) and stores load problems;
-	  `checkModules` and `buildServices` turn them and every declaration problem into one report.
-	- Errors fail the boot; the author-decided soft cases are warnings: colon-style middleware (the
-	  member is marked and every call is denied), orphan Middleware/Spec keys, reserved Client names.
-	- Module keys are read raw first and through the metatable only under pcall, so a module with a
-	  strict __index still loads. Keys that Loren replaces at boot (Dependencies, Signals,
-	  ClientEvents, Client.Server) go through `inject`, which remembers the declaration: `declared`
-	  keeps returning it, and `_reset` (Testing.Reset) puts it back.
-	No side effects on require.
-]]
 
 local RunService = game:GetService("RunService")
 
@@ -270,8 +255,6 @@ end
 
 -- Registration ------------------------------------------------------------------------------------
 
--- Collects ModuleScripts: direct items always; inside Folders only with Recursive (else listed in
--- `nested` for the warning). A ModuleScript's own children are never descended.
 local function collect(item: Instance, recursive: boolean, depth: number, out: { ModuleScript }, nested: { string })
 	if item:IsA("ModuleScript") then
 		if depth == 0 or recursive then
@@ -446,8 +429,6 @@ end
 
 -- Validation --------------------------------------------------------------------------------------
 
--- Validates an array of names (Dependencies, Signals, ClientEvents). Returns the names in order
--- without duplicates (one warning per duplicate), or nil after adding an error. nil is an empty list.
 function Registry.nameList(report: Report?, owner: string, value: any, hint: string?): { string }?
 	if value == nil then
 		return {}
@@ -494,9 +475,6 @@ function Registry.nameList(report: Report?, owner: string, value: any, hint: str
 	return out
 end
 
--- A Controller's declared Signals when they are an array of names (Loren turns them into
--- LocalSignals at boot); nil when absent, or when the Controller keeps its own signal objects there:
--- 1.5.1 never touched Controller.Signals, so such a table is left as it is.
 function Registry.controllerSignals(module: any): { string }?
 	local value = Registry.declared(module, "Signals")
 	if value == nil then
@@ -505,8 +483,6 @@ function Registry.controllerSignals(module: any): { string }?
 	return Registry.nameList(nil, "Signals", value)
 end
 
--- Per module: frozen tables Loren must write, Dependencies, hook types, Controller Signals.
--- Fills rec.deps with the validated names.
 function Registry.checkRecord(report: Report, rec: ModuleRecord): ()
 	local module = rec.module
 	local label = rec.kind .. " '" .. rec.name .. "'"
@@ -607,8 +583,6 @@ local function keysOf(...: { [string]: MemberDecl }): { string }
 	return out
 end
 
--- The network declaration of one Service (IMPLEMENTATION.md section 3.9). Invalid entries add an
--- error and are left out, so the returned decl is always well formed.
 function Registry.buildDecl(report: Report, rec: ModuleRecord, cfg: Config): ServiceDecl
 	local S = rec.name
 	local module = rec.module
@@ -897,8 +871,6 @@ Registry._test = table.freeze({
 	isLocked = function(): boolean
 		return locked
 	end,
-	-- Registers a module table without a ModuleScript (specs build modules as plain tables; a
-	-- ModuleScript's Source cannot be written at run time). Same record shape as `add`.
 	register = function(kind: string, name: string, module: any): ModuleRecord
 		local path = "Testing." .. kind .. "." .. name
 		local rec: ModuleRecord = {

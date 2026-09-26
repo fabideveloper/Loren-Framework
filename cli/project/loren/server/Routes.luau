@@ -1,25 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Routes (owner lane: server-net): route numbering, frozen route records, the manifest model and
-	its bytes, and the per-service Signals / ClientEvents maps.
-	Spec: design/loren-2.0/IMPLEMENTATION.md sections 3.16 (Routes.build), 4.3, 4.7, 6 (Members) and
-	11 (#7, #27, #34).
-
-	build(decls, cfg, report), at server boot step 5:
-	- Effective options per member: defaults <- Spec <- cfg.Members["Svc.Member"] (Methods and
-	  ClientEvents only; keys that do not apply to a kind are ignored). A Members key that names no
-	  Method or ClientEvent is a warning.
-	- Schema.check for every member (descriptor depth; unreliable or coalesced members must be typed
-	  without T.Instance / T.any): a problem is an error "<S>.<M>: <text>".
-	- Numbering: sort by (group, service, member, kind) with plain `<`, number 1..N (groups: 1
-	  unreliable Events and Signals, 2 reliable Events, 3 reliable Signals, 4 Methods). N > 65535 is
-	  an error.
-	- Codecs (Schema.compile), objects (ServerSignal.new, Signal.ServerEvent.new), the manifest model
-	  and `manifestMsg` (0xF1 len:u32 + Manifest.encode(model)), encoded once. Records and maps are
-	  frozen; the Signals / ClientEvents maps raise on unknown keys.
-	Returns nil when it added errors to the report.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Runtime = ReplicatedStorage.LorenRuntime
@@ -161,8 +141,6 @@ local function indexKey(t: any, key: string): any
 	return t[key]
 end
 
--- module[key] without letting a strict __index fail the boot (raw first, then the metatable under
--- pcall), the way Registry reads module keys.
 local function moduleKey(module: any, key: string): any
 	local v = rawget(module, key)
 	if v ~= nil or getmetatable(module) == nil then
@@ -176,8 +154,6 @@ local function roundTimeout(t: number): number
 	return math.round(t * 10) / 10
 end
 
--- Resolves one member's effective options. `override` is cfg.Members[fullName] (Methods and
--- ClientEvents only).
 local function resolve(decl: Types.ServiceDecl, m: Types.MemberDecl, cfg: Config, override: any): Pending
 	local spec: any = m.spec
 	local kind = m.kind

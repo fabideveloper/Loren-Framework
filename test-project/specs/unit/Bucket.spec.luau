@@ -1,6 +1,4 @@
 --!strict
--- Unit spec: LorenRuntime.Bucket (limiter lane). Pure math on explicit `now` values; no global state.
--- Runs on the server in Studio (Run mode or Play).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Bucket = require(ReplicatedStorage.LorenRuntime.Bucket)

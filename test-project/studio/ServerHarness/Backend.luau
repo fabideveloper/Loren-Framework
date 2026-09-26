@@ -1,15 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Backend: one server-side interface over the three runtimes (2.0, 1.5.1, raw).
-		Backend.boot(instrument)      boots Loren with the fixtures (+ fixtures/v2 on 2.x), or starts RawServer
-		Backend.resetRuntime()        2.0: Loren.Testing.Reset() through the LorenRuntime facade
-		Backend.startTicking(rate)    -> first Tick index;  Backend.stopTicking() -> last index
-		Backend.fireBurst(n)          -> (first, last)
-		Backend.countFor(player)      CounterService count (security integrity check)
-		Backend.handlerStats()        per-method handler calls/errors/denials/time
-		Backend.lorenStats()          2.0 Loren.GetStats() flattened to "key=value" lines, or nil
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
@@ -61,9 +51,6 @@ function Backend.boot(instrument: boolean)
 	end
 	Env.adopt(Loren)
 
-	-- 2.0-only fixtures (fixtures/v2, written by the integration phase): registered only when the
-	-- loaded Loren is 2.x (IMPLEMENTATION section 10), never instrumented (the v2 middleware specs
-	-- depend on the real parameter counts).
 	local v2Folder = testFolder():FindFirstChild("V2Services")
 	if v2Folder and not Env.is20 then
 		v2Folder = nil
@@ -100,8 +87,6 @@ function Backend.boot(instrument: boolean)
 	end
 end
 
--- Loren.Testing.Reset() through ReplicatedStorage.LorenRuntime (the 2.0 facade), so state left by
--- the unit specs never reaches the fixture boot. Returns an error text, or nil when it ran.
 function Backend.resetRuntime(): string?
 	local runtime = ReplicatedStorage:FindFirstChild("LorenRuntime")
 	if not (runtime and runtime:IsA("ModuleScript")) then

@@ -1,18 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Scenarios: the server side of every scenario and its REPORT.
-
-		check     all specs: unit (2.0, before the fixture boot; see beforeBoot), then runner +
-		          studio/server (+ v2/server on 2.0) here and studio/client (+ v2/client on 2.0) on
-		          every client; pass/fail per spec file
-		stress    CallSpammer + SignalWatcher on every client; Tick at Rate/s
-		burst     every 2 s each client fires 2*Rate calls in one frame; the server fires 2*Rate Ticks
-		security  Exploiter on client 1, CallSpammer + SignalWatcher on the others
-		soak      Soak bot (steady load + churn + memory samples) on every client; progress lines
-		compare   fixed load (20 s, 20 calls/s/client Echo 64 B, Tick 20/s), labelled with the runtime
-		all       check, then stress, then security
-]]
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -67,8 +54,6 @@ local function splitLines(text: string, into: { string }, indent: string?)
 	end
 end
 
--- Players in the game whose client harness never said hello (its Loren boot hung, or it errored
--- before reporting). Without this, a phase would quietly run without them.
 local function silentPlayers(): string?
 	local names = {}
 	for _, player in Players:GetPlayers() do
@@ -134,12 +119,6 @@ local unitRun: { results: LorenTest.Results?, notes: { string }, crash: string? 
 local EXPECTED_ERRORS_NOTE = "note: tests trigger errors on purpose during check; red lines in the Output are expected. "
 	.. "Only the CHECK REPORT / RESULT at the end decides pass or fail."
 
---[[
-	Loren's own log lines during the unit specs (they provoke warnings on purpose). They are captured
-	through Log._test.setDefaultSinks (it survives Log._reset(); nil restores the real sinks) instead
-	of flooding the Output, counted in the CHECK REPORT and printed there only if the unit phase
-	failed. Never active during the live fixture phase: that output is real runtime behavior.
-]]
 local MAX_SHOWN_LOG_LINES = 40
 local MAX_LOG_LINE_LENGTH = 300
 
@@ -168,8 +147,6 @@ local function defaultSinksHook(): SetSinks?
 	return if type(hook) == "function" then hook else nil
 end
 
--- A sink that records one kind of line while the capture is on, and passes it through once it is
--- off (so a line logged after the unit phase is never swallowed, even if the restore failed).
 local function captureSink(kind: string, real: Sink): Sink
 	return function(line: string)
 		if not unitLog.hook then
@@ -240,13 +217,6 @@ local function unitLogLines(into: { string })
 	end
 end
 
---[[
-	IMPLEMENTATION section 10: the check scenario runs specs/unit BEFORE the fixture bootstrap calls
-	SetOnFire, then calls Loren.Testing.Reset() once. Unit specs require runtime modules directly and
-	use offline boots, so they must not share the VM with a live, booted runtime. Called by
-	Server.server.luau before Backend.boot, for every plan that contains "check". Loren's log lines
-	are captured only while the unit specs run (see startLogCapture).
-]]
 local function runUnitSpecs()
 	local notes = unitRun.notes
 	if not ReplicatedStorage:FindFirstChild("LorenRuntime") then
@@ -701,8 +671,6 @@ function Scenarios.load(name: string, config: Config): PhaseResult
 	for _, player in players do
 		Coordinator.send(player, { cmd = "stop", runId = runId, ticks = { first = first, last = last } })
 	end
-	-- 1.5.1 drops settle only at their 10 s Timeout; the exploiter's own reply can also sit behind
-	-- its flood in the engine's ~500 remotes/s client queue, so security waits longer.
 	local resultWait = if name == "security" then 60 + math.ceil(params.duration) else 45
 	Report.say(string.format("%s: load done, waiting up to %d s for client results", name, resultWait))
 	local results = Coordinator.collect("result", runId, players, resultWait)

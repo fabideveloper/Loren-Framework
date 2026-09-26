@@ -1,9 +1,5 @@
 'use strict';
 
-// loren make and loren inject: both write into the correctly cased Services / Controllers
-// folders from one constant (dx-24, life:corr-19), refuse to overwrite without --force (dx-23),
-// then refresh the types and the sourcemap with the project's tool.
-
 const fs = require('fs');
 const path = require('path');
 const { PREMADE_KINDS, PREMADE_DIR, RETIRED_PREMADES } = require('../constants');
@@ -29,8 +25,6 @@ function destinationDir(paths, kind) {
 	return paths[PREMADE_KINDS[kind].target];
 }
 
-// Refuses a name that already exists as a Service or a Controller (a Controller and a networked
-// Service with the same name clash in Dependencies). --force replaces the same-kind entry only.
 function checkCollisions(root, paths, kind, name, force) {
 	const dir = destinationDir(paths, kind);
 	const existing = findModuleEntry(dir, name);

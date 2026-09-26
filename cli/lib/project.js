@@ -7,8 +7,6 @@ const { isFile, isDir } = require('./fsutil');
 const { CliError } = require('./errors');
 const { readLorenConfig, isScriptSync } = require('./scriptsync');
 
-// The project root is the current folder; it must hold default.project.json, or a .loren.json
-// that says "tool": "none" (Roblox Script Sync).
 function requireProject(cwd) {
 	const root = path.resolve(cwd);
 	const config = readLorenConfig(root);
@@ -55,8 +53,6 @@ function treeNode(tree, keys) {
 	return node || null;
 }
 
-// On-disk folders of the standard layout, read from default.project.json with the
-// scaffold's defaults as fallback. A Script Sync project has fixed folders (SCRIPT_SYNC_PATHS).
 function projectPaths(root, projectData) {
 	const synced = isScriptSync(root);
 	let data = projectData;
@@ -84,8 +80,6 @@ function projectPaths(root, projectData) {
 	};
 }
 
-// The entry in `dir` that is module `name` (Name.luau, Name.lua or a Name/ folder), compared
-// case-insensitively because Windows and macOS file systems are. Returns the entry or null.
 function findModuleEntry(dir, name) {
 	if (!isDir(dir)) return null;
 	const want = name.toLowerCase();

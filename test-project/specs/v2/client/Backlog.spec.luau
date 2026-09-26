@@ -1,6 +1,4 @@
 --!strict
--- 2.0 client Signal backlog: the server fires BootSignal before anyone listens (LorenBurn, or on
--- join); V2Controller connects late and gets it exactly once; the backlog is never re-armed.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

@@ -1,10 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Loren 2.0 shared types. Read-only for every lane (owner: contract).
-	Spec: design/loren-2.0/IMPLEMENTATION.md. Returns an empty frozen table; the types are the export.
-	Records are uniform: every field is always present (use false, 0 or "" instead of nil where noted).
-]]
 
 export type Promise = any -- evaera Promise (ReplicatedStorage.LorenPackages.Promise)
 
@@ -39,11 +34,7 @@ export type ReadCtx = {
 	err: number, -- Constants.Decode status (0 = ok); first failure wins
 	errArg: number, -- 1-based argument index of the failure (0 = frame-level)
 	nodes: number, -- inline tagged values in the current message (map keys excluded)
-	-- hostile: elements announced by untyped ARRAY headers in the current message (<= MAX_NODES), so
-	-- nested headers cannot all claim the same bytes before an element is read
 	claimed: number,
-	-- per ref (1-based) from walkSidecar; bit0 = contains a non-finite number; bit1 (hostile) = already
-	-- referenced in this frame (an honest encoder gives every reference its own slot)
 	refFlags: { number },
 }
 
@@ -56,8 +47,6 @@ export type PayloadCodec = {
 	allowNonFinite: boolean,
 	-- Appends the payload to w. Returns Constants.Encode status; w.errArg names the argument.
 	encode: (w: Writer, n: number, ...any) -> number,
-	-- Decodes one payload from b[o, lim). Returns (n, newOffset); sets ctx.err/ctx.errArg on failure.
-	-- Writes values into argv[1..n]; the caller clears argv[1..n] after use.
 	decode: (b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }) -> (number, number),
 }
 
@@ -291,6 +280,7 @@ export type Config = {
 	BacklogWindow: number,
 	ForwardErrors: string,
 	StrictCycles: boolean,
+	CycleWarnings: boolean,
 	InlineTables: boolean,
 	MiddlewareArityCheck: boolean,
 	KickScore: number | false,
@@ -327,9 +317,6 @@ export type Stats = {
 
 -- Public facade -----------------------------------------------------------------------------------
 
--- Every function accepts the dot and the colon form at runtime (a leading Loren argument is dropped).
--- Functions with parameters are typed (...any) so both forms check on both type solvers. Exception: Get is
--- generic so Loren.Get(require(m)) keeps the module type; Loren:Get(m) runs but does not type-check.
 export type Loren = {
 	IsServer: boolean,
 	IsClient: boolean,

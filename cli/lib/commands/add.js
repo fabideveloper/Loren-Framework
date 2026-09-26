@@ -1,9 +1,5 @@
 'use strict';
 
-// loren add <user/repo | GitHub URL> [alias]: downloads a snapshot of a repository into
-// loren_packages/<Name> (crit-01, dx-23). The download goes to a temp folder first, so a failed
-// or empty download changes nothing, and an existing package is only replaced with --force.
-
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

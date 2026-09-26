@@ -1,11 +1,4 @@
 --!strict
--- Lifecycle (lifecycle): the offline server boot (section 8.2), a failure injected at every step
--- (State Failed, root rejects with the report, Transport never opened, red error), Ignite order,
--- yielding Ignite warnings, IgniteTimeout, Burn isolation, shared boots, OnReady, the facade flags,
--- StrictCycles, LorenExtinguish order and budget, and the client dependency rules. Runs on the server.
---
--- Boots are offline (Testing.Reset({ Offline = true })). A "fake" LorenServer index wraps the real
--- modules through Lifecycle._test.setServer: every call is logged and single calls can be replaced.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -63,8 +56,6 @@ return function(t: any)
 		return nil
 	end
 
-	-- A LorenServer index that logs every call ("Module.fn") and lets a spec replace single calls:
-	-- overrides["Transport.claim"] = function(real, ...) ... end.
 	local function fakeServer(overrides: { [string]: any }?): (any, { string })
 		local calls: { string } = {}
 		local o: { [string]: any } = overrides or {}
@@ -242,7 +233,7 @@ return function(t: any)
 			expect(Loren.State).toBe("Ready")
 		end)
 
-		it("warns about cycles by default and runs the cycle in name order", function()
+		it("allows cycles silently by default and runs the cycle in name order", function()
 			local log: { string } = {}
 			local function mod(name: string, deps: { string })
 				service(name, {
@@ -256,6 +247,14 @@ return function(t: any)
 			mod("A", { "B" })
 			expect((settle(Loren.SetOnFire()))).toBe(true)
 			expect(log).toEqual({ "A", "B" })
+			expect(hasLine(warnings, "Dependency cycle")).toBeNil()
+		end)
+
+		it("lists cycles in the boot warnings when CycleWarnings is on", function()
+			Loren.Configure({ CycleWarnings = true })
+			service("B", { Dependencies = { "A" } })
+			service("A", { Dependencies = { "B" } })
+			expect((settle(Loren.SetOnFire()))).toBe(true)
 			local w = hasLine(warnings, "Boot warnings on Server (1):")
 			expect(w).toBeTruthy()
 			expect(w :: string).toContain("Dependency cycle: A -> B -> A")

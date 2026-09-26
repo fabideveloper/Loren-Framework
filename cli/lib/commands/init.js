@@ -12,6 +12,7 @@ const {
 	PROMISE_KEEP,
 	SCRIPT_SYNC_PATHS,
 	isSpecFile,
+	CLI_INSTALL,
 } = require('../constants');
 const { copyDir, exists, isDir, rel, removePath, walkFiles, writeText } = require('../fsutil');
 const { validateProjectName } = require('../names');
@@ -23,8 +24,6 @@ const { writeLorenConfig, runtimeVersion, serverRuntimeSource, syncSteps, readme
 // What `loren init` offers, in this order (the first is the default).
 const CHOICE_LABELS = Object.freeze({ rojo: 'Rojo', argon: 'Argon', none: 'None: Roblox Script Sync (built into Studio)' });
 
-// What init takes from each scaffold entry. Spec files never reach a project, and of the vendored
-// Promise only lib/, LICENSE and its project file are kept (crit-07).
 function scaffoldFilter(entry) {
 	return (relPath, directory) => {
 		const parts = relPath.split('/');
@@ -49,7 +48,7 @@ function writeScaffold(templateDir, target, name, tool) {
 	fs.mkdirSync(target, { recursive: true });
 	for (const entry of SCAFFOLD_ENTRIES) {
 		const src = path.join(templateDir, entry);
-		if (!exists(src)) throw new Error(`the CLI's project template is missing ${entry} (reinstall: npm i -g loren-framework)`);
+		if (!exists(src)) throw new Error(`the CLI's project template is missing ${entry} (reinstall: ${CLI_INSTALL})`);
 		if (entry === PROJECT_FILE) continue;
 		if (isDir(src)) copyDir(src, path.join(target, entry), { filter: scaffoldFilter(entry) });
 		else fs.copyFileSync(src, path.join(target, entry));
@@ -62,14 +61,12 @@ function writeScaffold(templateDir, target, name, tool) {
 	if (!vs.ok) throw new Error(vs.reason);
 }
 
-// Roblox Script Sync (--tool none): no project file and no toolchain. Only Folders sync, so the four
-// synced folders hold everything, the runtime included (SCRIPT_SYNC_PATHS). Throws on any failure.
 function writeScriptSyncScaffold(templateDir, target, name) {
 	const from = (...parts) => path.join(templateDir, ...parts);
 	const to = (relPath, ...parts) => path.join(target, ...relPath.split('/'), ...parts);
 	for (const entry of ['loren', 'src', `loren_packages/${PROMISE_DIR}/lib/init.lua`]) {
 		if (!exists(from(...entry.split('/')))) {
-			throw new Error(`the CLI's project template is missing ${entry} (reinstall: npm i -g loren-framework)`);
+			throw new Error(`the CLI's project template is missing ${entry} (reinstall: ${CLI_INSTALL})`);
 		}
 	}
 	const noSpec = scaffoldFilter('src');
@@ -77,8 +74,6 @@ function writeScriptSyncScaffold(templateDir, target, name) {
 	copyDir(from('src', 'shared'), to(SCRIPT_SYNC_PATHS.shared), { filter: noSpec });
 	copyDir(from('src', 'server'), to(SCRIPT_SYNC_PATHS.server), { filter: noSpec });
 	copyDir(from('src', 'client'), to(SCRIPT_SYNC_PATHS.client), { filter: noSpec });
-	// Script Sync makes X.client.luau a Script with RunContext Client, which runs twice from
-	// StarterPlayerScripts: the bootstrap must be X.local.luau (a LocalScript).
 	for (const file of walkFiles(to(SCRIPT_SYNC_PATHS.client))) {
 		if (/\.client\.luau?$/i.test(file)) fs.renameSync(file, file.replace(/\.client(\.luau?)$/i, '.local$1'));
 	}

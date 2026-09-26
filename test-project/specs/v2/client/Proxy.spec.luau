@@ -1,6 +1,4 @@
 --!strict
--- 2.0 service proxy: cached per service, frozen, unknown keys raise (with a suggestion), dot calls
--- with arguments raise, the 1.5.1 no-argument dot call still works, and the Try form.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

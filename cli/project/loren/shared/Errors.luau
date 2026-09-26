@@ -1,14 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Errors (owner lane: lifecycle): error codes to 1.5.1-compatible rejection strings, the frozen
-	ErrorInfo record, incident ids and the Loren.Reject sentinel.
-	Spec: IMPLEMENTATION.md sections 3.3 and 5.
-
-	Every rejection is (message: string, info: ErrorInfo). The message keeps the 1.5.1 strings
-	("(LORENঌ) Timeout", "Denied", a middleware reason), so code that compares the first value keeps
-	working. No side effects on require (a Random is a value, not an Instance).
-]]
 
 local C = require(script.Parent.Constants)
 local Types = require(script.Parent.Types)
@@ -39,8 +30,6 @@ local RejectMeta = table.freeze({
 	end,
 })
 
--- First ERR_MSG_MAX bytes of s. A cut never splits a UTF-8 sequence (the result may be up to 3 bytes
--- shorter); bytes that are not valid UTF-8 are cut at exactly ERR_MSG_MAX.
 function Errors.truncate(s: string): string
 	if #s <= MSG_MAX then
 		return s
@@ -143,8 +132,6 @@ function Errors.rejection(
 	return message, Errors.info(code, service, member, message, data, incident, arg)
 end
 
--- Loren.Reject(msg, data?): an intended failure. Works returned or thrown (error(Loren.Reject(...))
--- keeps the table as the error value). The message is truncated to ERR_MSG_MAX bytes.
 function Errors.reject(msg: any, data: any?): RejectSentinel
 	local text: string
 	if msg == nil then

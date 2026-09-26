@@ -1,10 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Loren 2.0 constants: wire bytes, error codes, decode/encode statuses, violation kinds and
-	default limits. Read-only for every lane (owner: contract). Spec: design/loren-2.0/IMPLEMENTATION.md.
-	Every nested table is frozen; the module has no side effects.
-]]
 
 local freeze = table.freeze
 
@@ -431,8 +426,6 @@ C.Limit = freeze({
 	SWEEP_INTERVAL = 0.1, -- client pending-call sweeper
 	WATCHDOG_INTERVAL = 0.25, -- server watchdog sweep
 	QUARANTINE_AFTER_CANCEL = 60,
-	-- quarantine until max(cancel + 60, send + timeout + 40): past the server's last possible reply
-	-- (receipt + timeout + WatchdogGrace, grace <= WATCHDOG_GRACE_MAX) with 10 s left for latency
 	QUARANTINE_AFTER_DEADLINE = 40,
 	WATCHDOG_GRACE_MAX = 30, -- WatchdogGrace upper bound (Configure)
 	QUEUE_MAX = 1024, -- MaxQueuedCalls and SerialQueue upper bound (Configure)
@@ -501,6 +494,7 @@ C.Default = freeze({
 	-- policies
 	ForwardErrors = "Studio", -- "Studio" | "Never" | "Always"
 	StrictCycles = false,
+	CycleWarnings = false, -- when true, allowed dependency cycles are listed in the boot warnings
 	InlineTables = true,
 	MiddlewareArityCheck = true,
 	KickScore = false :: number | false,

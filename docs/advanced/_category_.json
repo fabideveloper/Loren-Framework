@@ -1,9 +1,6 @@
 {
-  "label": "Advanced",
+  "label": "Under the hood",
   "position": 7,
-  "link": {
-    "type": "generated-index",
-    "title": "Advanced",
-    "description": "How Loren works under the hood, and the hard limits you should design around."
-  }
+  "collapsed": false,
+  "link": null
 }

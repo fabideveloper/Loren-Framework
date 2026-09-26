@@ -1,12 +1,4 @@
 --!strict
---[[
-	Signal unit spec (signals lane; IMPLEMENTATION.md sections 3.8 and 10). Runs on the server in Run
-	mode or Play, before the fixture boot, and requires the runtime modules directly.
-
-	One test prints on purpose: the LocalSignal listener-error test makes the engine print one red
-	script error containing "[Signal.spec] intentional" (listener errors reach the engine output).
-	Loren's own warnings are captured through Log._test.setSink and asserted, not printed.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

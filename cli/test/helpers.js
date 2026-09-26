@@ -1,9 +1,5 @@
 'use strict';
 
-// Shared test helpers: temp dirs, an in-process CLI runner, a recording process runner and
-// mocks of lib/tool.js, types.js, lint.js and update.js. Nothing here touches the network
-// or the repository tree.
-
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -21,8 +17,6 @@ function tmpDir(t) {
 	return dir;
 }
 
-// A spawnSync-like runner that records every call. `handlers[cmd](args, opts)` may return a result;
-// the default is success. `missing` lists commands that fail with ENOENT.
 function fakeRunner({ handlers = {}, missing = [] } = {}) {
 	const calls = [];
 	const run = (cmd, args = [], opts = {}) => {

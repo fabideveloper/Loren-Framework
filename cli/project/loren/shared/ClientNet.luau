@@ -1,31 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	ClientNet: the client transport (owner lane: client-net).
-	Spec: IMPLEMENTATION.md sections 3.17, 4 and 8.3; BLUEPRINT.md sections 2 and 4.
-
-	connect(): waits for ReplicatedStorage.LorenNet in State Ready or ShuttingDown and for its two
-	remotes, connects both OnClientEvent handlers before sending anything, sends HELLO (outside the
-	flush credit), starts the Heartbeat loop and waits for the MANIFEST. The MANIFEST is decoded
-	inside the frame decode and every ClientRoute (codecs, Signal objects, mirror buckets) is built
-	there, so the messages after it in the same frame are delivered (into signal backlogs).
-
-	Outgoing: a call or event is encoded once into the scratch writer and committed to the open frame
-	of its channel. A reliable frame seals before its weight (bytes + 8 per sidecar node + sidecar
-	string bytes) passes C2S_SEAL, before 255 refs, 2048 sidecar nodes or msgCap messages; a message
-	with refs is re-encoded after a seal (C->S ref indexes are frame-absolute). Unreliable frames seal
-	at 900 bytes. Flushes run at most FLUSH_HZ times per second (Heartbeat accumulator with clamped
-	carry, shared by Loren.Flush) and fire queued frames in order, each only when the admission mirror
-	(frame, byte and message buckets at MirrorFraction of the server's) can charge the whole frame,
-	exactly as the server's admitFrame will. A paced backlog therefore never outruns the server.
-
-	Incoming frames are trusted server output but are still decoded with status codes and one pcall
-	backstop per frame. S->C messages have no length prefix, so every message is decoded to find the
-	next one; a structural error drops the rest of the frame (logged once).
-
-	Memory: the decode and flush threads run in the "Loren" memory category, reset around every call
-	into user code (signal listeners, promise settles). No side effects on require.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -133,9 +107,6 @@ local SCRATCH_KEEP = 2 * C2S_MAX_MESSAGE -- a larger scratch writer is replaced 
 local ERR_FLAGS_KNOWN = bit32.bor(ErrFlag.Msg, ErrFlag.Data, ErrFlag.Incident)
 -- A client restart re-sends HELLO; keep it past the server's REHELLO_MIN so it is never a violation.
 local HELLO_SPACING = Limit.REHELLO_MIN + 1
--- While no MANIFEST arrives, HELLO is repeated this often. The server ignores a repeat that arrives
--- before any other message without counting a violation, however the uplink bunches them (the
--- client sends nothing else before MANIFEST).
 local HELLO_RETRY = 2 * Limit.REHELLO_MIN
 
 local PHASE_IDLE = 0
@@ -496,8 +467,6 @@ local function loseEvent(route: ClientRoute)
 	end
 end
 
--- A local rejection: an already-rejected Promise, or (false, message, info) for Try.
--- `arg`: the 1-based argument index for BadArgument (0 or nil = none).
 local function localReject(route: ClientRoute, try: boolean, code: number, reason: string?, arg: number?): ...any
 	if code == Err.RateLimited then
 		callsRateLimited += 1
@@ -516,8 +485,6 @@ end
 local function admit(ch: Channel, fr: Frame, now: number): boolean
 	local fb, bb, mb = ch.frame, byteBucket, msgBucket
 	local cost = math.max(fr.n, MIN_CHARGE) + REF_CHARGE * fr.nrefs + NODE_CHARGE * fr.nodes + fr.sideBytes
-	-- A frame larger than a whole mirror burst could never pass; charge the burst so the queue
-	-- cannot deadlock (unreachable when the server's Config cross-checks hold).
 	if cost > bb.burst then
 		cost = bb.burst
 	end
@@ -590,8 +557,6 @@ local function fireQueued(ch: Channel, now: number)
 	ch.qtail = 0
 end
 
--- Queued frames first; the open frame is sealed and fired only when nothing waits ahead of it
--- (while paced it keeps filling up to its seal limits, which only lowers the admission cost).
 local function flushChannel(ch: Channel, now: number)
 	fireQueued(ch, now)
 	if ch.qtail < ch.qhead and ch.open.nmsg > 0 then
@@ -600,8 +565,6 @@ local function flushChannel(ch: Channel, now: number)
 	end
 end
 
--- Pending coalesced messages go into the open frames (route order), one mirror token each.
--- A message the mirror or the unsent bound refuses stays pending (a later Fire replaces it).
 local function commitCoalesced(now: number)
 	for _, id in coList do
 		local len = coLen[id]
@@ -838,9 +801,6 @@ local function install(m: Types.ManifestModel)
 	warnedLossy = flags1
 	warnedLost = flags2
 
-	-- Admission mirror. The server's buckets were full at join and have only refilled since, so
-	-- mirrors that start full at MirrorFraction stay below them; the HELLO frames already sent are
-	-- charged as the server charged them.
 	rel.frame = Bucket.new(lim.frameRate * mirror, math.max(1, lim.frameBurst * mirror), now)
 	unr.frame = Bucket.new(lim.frameRate * mirror, math.max(1, lim.frameBurst * mirror), now)
 	byteBucket = Bucket.new(lim.byteRate * mirror, math.max(MIN_CHARGE, lim.byteBurst * mirror), now)
@@ -1092,9 +1052,6 @@ local function onFrame(unreliable: boolean, frame: any, refs: any)
 	end
 	local len = buffer.len(frame)
 	if model == nil then
-		-- Before the MANIFEST: unreliable frames are dropped silently (the channels are not ordered
-		-- with each other), and a reliable frame that does not start with MANIFEST belongs to an
-		-- earlier session of this client (a restart); the MANIFEST always leads its frame.
 		if unreliable or len < 1 or buffer.readu8(frame, 0) ~= Op.MANIFEST then
 			return
 		end
@@ -1120,8 +1077,6 @@ end
 
 -- API ------------------------------------------------------------------------------------------------
 
--- Yields until the MANIFEST (§8.3). nil + reason when the server boot failed or the manifest is
--- unusable (the client boot then fails). Waits never time out; they warn once.
 function ClientNet.connect(): (Types.ManifestModel?, string?)
 	if phase == PHASE_READY and model ~= nil then
 		return model, nil
@@ -1323,8 +1278,6 @@ function ClientNet.call(route: ClientRoute, try: boolean, n: number, ...: any): 
 	return Calls.promise(req)
 end
 
--- ClientEvent:Fire. Encode errors and oversized messages raise at the caller's line; a message the
--- rate mirror or the unsent bound refuses is dropped and counted (EventsLost).
 function ClientNet.fire(route: ClientRoute, n: number, ...: any): ()
 	if phase ~= PHASE_READY then
 		eventsLost += 1
@@ -1430,9 +1383,6 @@ end
 function ClientNet.fail(): ()
 	phase = PHASE_FAILED
 	disconnectAll()
-	-- The server keeps sending to a helloed client. With no OnClientEvent listener the engine queues
-	-- those frames and warns that the invocation queue is exhausted, so both remotes stay drained;
-	-- onFrame drops everything once Failed.
 	local r, u = reliableRemote, unreliableRemote
 	if r ~= nil then
 		table.insert(connections, r.OnClientEvent:Connect(onReliable))
@@ -1548,8 +1498,6 @@ ClientNet._test = table.freeze({
 		clock = fn or os.clock
 		Calls._test.setClock(fn)
 	end,
-	-- Captures fires instead of FireServer: fn(unreliable, frame, refs?, nodes, sideBytes). A throwing
-	-- fn acts like a FireServer that raised.
 	setFire = function(fn: ((boolean, buffer, { any }?, number, number) -> ())?)
 		fireHook = fn
 	end,

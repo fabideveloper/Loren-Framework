@@ -1,9 +1,4 @@
 --!strict
--- Unit spec: the server wire path (server-net lane): Transport receive pipeline (section 4.10), Outbox
--- (HELLO, outbox, flush, seals, retries), Dispatch (section 4.11 call states, middleware, replies) and
--- ServerSignal. Runs on the server in Studio (Run mode or Play). No real players are used: test doubles
--- { UserId, Kick } get player states through Transport._test, fires are captured through
--- Outbox._test.capture, and one fake clock drives Transport, Outbox, Dispatch, Limits and Violations.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 

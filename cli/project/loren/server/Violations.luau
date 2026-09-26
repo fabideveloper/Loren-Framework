@@ -1,22 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Violations: per-player violation scores, OnViolation, KickScore, drop counters and the 30 s
-	summary lines (owner lane: limiter). Spec: IMPLEMENTATION.md sections 0 (Logging rules), 3.15,
-	4.10 and 6 (KickScore).
-
-	- record (a C.Violation kind): score = max(0, score - elapsed * SCORE_DECAY) + weight; the kind
-	  is counted for the summary window and for the next OnViolation call. Handlers get at most one
-	  call per player per ON_VIOLATION_INTERVAL, carrying the counts accumulated since the last call
-	  (counts left over inside an interval are delivered by a later record or tick). KickScore kicks
-	  once.
-	- drop (a C.Drop kind): counters only (window + global totals).
-	- tick (once per player per flush): at most one summary line per player per SUMMARY_INTERVAL,
-	  through Log's global budget. Nothing is ever logged per drop or per violation.
-
-	record/drop/tick are O(1) and allocation-free except for the (throttled) OnViolation call and
-	the summary line. `now` comes from the caller (os.clock()).
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Runtime = ReplicatedStorage.LorenRuntime
@@ -72,8 +55,6 @@ local function decayed(pv: PlayerViolations, now: number): number
 	return if score > 0 then score else 0
 end
 
--- Runs on its own thread (task.spawn from the receive path, which may be tagged "Loren"): user code
--- is never counted in Loren's memory category.
 local function runHandler(fn: Handler, player: Player, kind: string, score: number, counts: { [string]: number })
 	debug.resetmemorycategory()
 	local ok, err = pcall(fn :: any, player, kind, score, counts)
@@ -156,9 +137,6 @@ function Violations.record(player: Player, pv: PlayerViolations, kind: number, n
 	end
 end
 
--- Counts `n` drops of `kind` (C.Drop). `pv` may be nil for drops without a player state (Departed).
--- A count that is not positive (0, negative, NaN) changes nothing: it would mark the window dirty
--- with nothing to report (an empty summary line) or poison the totals.
 function Violations.drop(pv: PlayerViolations?, kind: number, n: number): ()
 	if kind < 1 or kind > NUM_DROPS or kind % 1 ~= 0 or not (n > 0) then
 		return -- not a C.Drop kind, or nothing to count

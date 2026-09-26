@@ -1,8 +1,5 @@
 'use strict';
 
-// Sync-tool helpers shared by every command that touches Rojo or Argon (dx-30, dx-31, crit-06).
-// Every function that runs a program takes `run`, a spawnSync-compatible runner, so tests can mock it.
-
 const { spawnSync } = require('child_process');
 const path = require('path');
 const { TOOLS, MANAGERS, MANAGER_FILES, PROJECT_FILE, SCRIPT_SYNC, LOREN_CONFIG_FILE } = require('./constants');
@@ -19,17 +16,12 @@ const MANIFEST_PATTERNS = Object.freeze({
 	argon: /["'\s=]argon-rbx\/argon(?:@|["'\s]|$)/im,
 });
 
-// cmd.exe's answer for a program that does not exist (the shell retry only happens on Windows):
-// exit code 9009 in every language, and the English message for older shells.
 const notFound = (r) =>
 	r.status === 9009 || /is not recognized as an internal or external command/i.test(String(r.stderr || ''));
 
 // One cmd.exe argument. Callers pass fixed arguments; quoting only guards spaces and quotes.
 const cmdQuote = (s) => (/^[\w@%+=:,./\\-]+$/.test(String(s)) ? String(s) : `"${String(s).replace(/"/g, '""')}"`);
 
-// spawnSync without a shell first. On Windows a shim may be a .cmd file, which Node only starts
-// through a shell, so retry with one when the direct spawn cannot find or start the program.
-// The retry passes one command line, not args with shell: true (deprecated since Node 24, DEP0190).
 function defaultRun(cmd, args = [], opts = {}) {
 	const base = { encoding: 'utf8', windowsHide: true, ...opts };
 	const first = spawnSync(cmd, args, { ...base, shell: false });
@@ -43,8 +35,6 @@ function defaultRun(cmd, args = [], opts = {}) {
 	return second;
 }
 
-// Rokit and Aftman: `rojo = "rojo-rbx/rojo@7.5.1"`. Foreman: `rojo = { source = "rojo-rbx/rojo", ... }`.
-// Comments are dropped; tool specs never contain '#'.
 function manifestTools(text) {
 	const clean = String(text)
 		.split(/\r?\n/)
@@ -69,8 +59,6 @@ function isInstalled(tool, run = defaultRun, cwd = process.cwd()) {
 	}
 }
 
-// Where the answer came from, for messages: { tool, source: '.loren.json' | 'rokit.toml' | 'installed' | null }.
-// A .loren.json with "tool": "none" (Roblox Script Sync) wins over everything else.
 function detectToolInfo(root, run = defaultRun) {
 	if (isScriptSync(root)) return { tool: NONE, source: LOREN_CONFIG_FILE };
 	for (const manager of MANAGERS) {
@@ -89,14 +77,10 @@ function detectToolInfo(root, run = defaultRun) {
 	return { tool: null, source: null };
 }
 
-// 'none' | 'rojo' | 'argon' | null: .loren.json, then manifests (rokit.toml, aftman.toml, foreman.toml),
-// then what is installed.
 function detectTool(root, run = defaultRun) {
 	return detectToolInfo(root, run).tool;
 }
 
-// `--tool` wins; otherwise detection. Throws a clear error when there is nothing to use. A Script Sync
-// project (.loren.json) is always 'none': another --tool is refused, since it has no project file.
 function resolveTool(root, override, run = defaultRun) {
 	if (override !== undefined && override !== null && override !== '') {
 		const id = normalizeTool(override);
@@ -126,8 +110,6 @@ function serveArgs(tool) {
 	return id === 'argon' ? ['serve', PROJECT_FILE, '--sourcemap'] : ['serve', PROJECT_FILE];
 }
 
-// `<tool> sourcemap default.project.json -o sourcemap.json` in `root`. Never throws. Script Sync has
-// no sourcemap (Luau-LSP gets the DataModel from its Studio plugin): nothing runs.
 function sourcemap(root, tool, run = defaultRun) {
 	const id = normalizeTool(tool);
 	if (!id) return { ok: false, error: `Unknown sync tool "${tool}". Use rojo or argon.` };
@@ -161,9 +143,6 @@ function sourcemap(root, tool, run = defaultRun) {
 	return { ok: true };
 }
 
-// Luau-LSP settings for .vscode/settings.json. Rojo: the extension regenerates the sourcemap.
-// Argon: `argon serve --sourcemap` writes it, so the extension must not also run Rojo.
-// Script Sync: plugin mode (the Luau Language Server Companion Studio plugin), no sourcemap.
 function vscodeSettings(tool) {
 	const id = normalizeTool(tool) || 'rojo';
 	if (id === NONE) return { ...PLUGIN_SETTINGS };

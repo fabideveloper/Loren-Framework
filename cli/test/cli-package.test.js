@@ -1,8 +1,5 @@
 'use strict';
 
-// What ships: `npm pack --dry-run` on a copy of the package (never in the repo itself), plus the
-// templates' formatting (stylua) and, with LOREN_E2E=1, a real init + rojo/argon + luau-lsp run.
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -121,8 +118,6 @@ for (const tool of ['rojo', 'argon']) {
 	});
 }
 
-// Roblox Script Sync has no project file and no sourcemap. A throwaway Rojo project next to the game
-// maps the four synced folders the way Script Sync does, only so luau-lsp can check the types.
 test('E2E: init --tool none, make, inject, update, doctor and luau-lsp on the Script Sync layout', { skip: !e2e, timeout: 300000 }, (t) => {
 	const dir = tmpDir(t);
 	const env = { ...process.env, NO_UPDATE_NOTIFIER: '1', CI: '1' };

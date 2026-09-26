@@ -1,38 +1,4 @@
 --!strict
---[[
-	V2Service: the 2.0 integration fixture (IMPLEMENTATION.md section 10). The Studio harness registers
-	it only when Loren.Version starts with "2." (fixtures/v2), so 1.5.1 never sees the 2.0-only keys.
-	Unreliable and coalesced members are typed without T.Instance/T.any (section 3.6).
-
-	Methods  Echo(...) untyped, returns its arguments (nil holes kept)
-	         TypedEcho(s: string(64), n: u16, v: Vector3) returns (s, n, v); the second return is T.u8,
-	           so n > 255 is a BadResult on purpose
-	         Slow(seconds) waits (Timeout 3, CancelOnTimeout, RateLimit { 100, 200 })
-	         Hang() waits HANG_SECONDS (Timeout 2): abandoned by the watchdog, a zombie until it ends
-	         Boom() throws; RejectMe(msg, data, thrown?) returns (or throws) Loren.Reject(msg, data)
-	         ReturnPromise(v, reject?) returns a Promise resolving v (or rejecting with Loren.Reject)
-	         SerialAdd(n) (Serial) adds n to a per-player total with a yield between read and write
-	         MwDot / MwColon / MwThrow / MwTruthy / MwPromise: one middleware style each
-	         Limited() (RateLimit { 2, 2 }); Big(n) returns n bytes
-	         NeedsPart(part: T.Instance("BasePart"), hidden?) returns part, or a server-only part
-	Events   Ping(command, ...) reliable and untyped: the client specs' command channel (below)
-	         Aim(T.Vector3) unreliable, coalesced; Seq(T.u32) unreliable, Ordered
-	Signals  BootSignal (LorenBurn: FireAll to the players present; each later joiner gets one Fire)
-	         Hit(T.string(64), T.u16); Stream(nonce: T.u32, index: T.u32, value: T.f64) unreliable
-	         Echo untyped: shares the Method's name, as 1.5.1 allowed
-
-	Ping commands (client data is validated; anything else is ignored):
-		"echo", ...              Signals.Echo:Fire(player, "Ping", ...)
-		"throw", tag             a listener connected before the main one throws; the main one
-		                         still echoes ("Throw", tag)
-		"hit" | "hitFor" | "hitExcept", tag, n
-		                         Signals.Hit:Fire(player, ...) / :FireFor({ player }, ...) / :FireExcept(player, ...)
-		"stream", nonce, count   Signals.Stream:Fire(player, nonce, i, i * 0.25) for i = 1..count (count <= 64)
-	Aim and Seq arrivals are echoed on Signals.Echo as ("Aim", v) and ("Seq", n).
-
-	V2Service.Probe is server-side evidence for specs/v2/server (never networked: it is not under Client).
-	The texts below are mirrored by specs/v2/client/_V2.luau.
-]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -212,8 +178,6 @@ function V2Service.Middleware.MwDot(player: Player, verdict: any): (boolean, str
 	return false, MW_DOT_DENIED
 end
 
--- Colon-defined on purpose (same parameter count as Client:MwColon): flagged at boot with a warning,
--- and every call is denied without running it.
 function V2Service.Middleware:MwColon(player: Player, _verdict: any): boolean
 	mwRan("MwColon", player)
 	return true
@@ -342,8 +306,6 @@ function V2Service.Client:SerialAdd(player: Player, n: any): any
 	return total
 end
 
--- Every member middleware above runs first; the handlers only count (and flag calls that should
--- never have reached them).
 function V2Service.Client:MwDot(_player: Player, verdict: any): string
 	bump(Probe.handler, "MwDot")
 	if verdict ~= "allow" then

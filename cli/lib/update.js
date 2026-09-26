@@ -1,15 +1,5 @@
 'use strict';
 
-// `loren update`: moves THIS PROJECT to the runtime bundled with this CLI (dx-26, BLUEPRINT §8).
-// 1.5.1 projects (src/shared/Loren.luau is the whole runtime) and 2.x projects (it is the shim).
-// Steps: replace loren/ (no stale files), write the shim, patch default.project.json, vendor a
-// spec-free Promise, regenerate the types, then the sourcemap and the middleware lint.
-// Everything replaced is copied to .loren-backup/<timestamp>/ first. User modules are untouched
-// unless the lint's rewrite is confirmed. A second run on an up-to-date project changes nothing.
-// Script Sync projects (.loren.json, tool "none") have no project file and no sourcemap: the runtime
-// lives in ReplicatedStorage/Shared/LorenRuntime and ServerScriptService/Server/LorenServer, and
-// Promise is one file, ReplicatedStorage/LorenPackages/Promise.luau.
-
 const fs = require('fs');
 const path = require('path');
 const C = require('./constants');
@@ -64,8 +54,6 @@ const sameText = (a, b) => a !== null && b !== null && normalizeEol(stripBom(a))
 
 const readVersion = runtimeVersion;
 
-// Semver order: numeric x.y.z; a pre-release (2.0.0-beta) sorts before its release, and its
-// dot-separated parts compare numerically when both are numbers (beta.10 > beta.9).
 function compareVersions(a, b) {
 	const parse = (v) => {
 		const s = String(v).trim().replace(/^v/i, '').replace(/\+.*$/, '');
@@ -114,8 +102,6 @@ function classifyLorenFile(text) {
 	return 'other';
 }
 
-// { kind: 'legacy' | 'v2' | 'none', reason, lorenFile, lorenState, installedVersion }
-// The shared runtime is loren/shared, or layout.runtimeShared (Script Sync keeps it in Shared).
 function detectProject(root, layout) {
 	const sharedDir = path.join(root, layout.shared);
 	const existing = SHIM_NAMES.map((n) => path.join(sharedDir, n)).filter(isFile);
@@ -238,8 +224,6 @@ function patchProject(data, layout) {
 
 // Package contents ----------------------------------------------------------------------------------
 
-// Relative runtime files to install, with their text (after --no-native and `transform`, which
-// rewrites Luau sources: Script Sync's server runtime path).
 function runtimeFiles(pkgRuntime, noNative, transform = null) {
 	const files = new Map();
 	for (const relPath of listRelFiles(pkgRuntime)) {
@@ -257,8 +241,6 @@ function runtimeFiles(pkgRuntime, noNative, transform = null) {
 	return files;
 }
 
-// Dotfiles (.DS_Store, editor swap files) are never installed, so they do not make an installed
-// runtime differ; a real replace still removes them.
 function runtimeDiffers(target, files) {
 	if (!isDir(target)) return true;
 	const have = listRelFiles(target).filter((f) => !path.posix.basename(f).startsWith('.'));
@@ -295,8 +277,6 @@ function promiseProblems(pkgPromise, userPromise) {
 	return problems;
 }
 
-// Tree folders that point outside the project: Loren cannot manage them, so it uses the defaults
-// (src/shared, loren_packages...) and says so.
 function outsideMappings(root, data) {
 	const found = [];
 	for (const [label, keys] of Object.entries({
@@ -337,9 +317,6 @@ function misplacedFolders(root, layout) {
 
 // runUpdate -----------------------------------------------------------------------------------------
 
-// runUpdate(root, { packageRoot, tool, dryRun, yes, noNative, isTTY, confirm, log, now,
-//                   sourcemapRunner, force }) -> { exitCode, actions, ... }
-// exitCode: 0 done (or nothing to do), 1 failed / not a Loren project / cancelled, 2 needs --yes.
 async function runUpdate(root, opts = {}) {
 	const {
 		packageRoot,
@@ -374,7 +351,7 @@ async function runUpdate(root, opts = {}) {
 		(f) => !isFile(f),
 	);
 	if (missingPkg.length) {
-		log.error(`This install of the Loren CLI is incomplete (missing ${missingPkg.map((f) => path.relative(pkgProject, f)).join(', ')}). Reinstall it: npm i -g loren-framework`);
+		log.error(`This install of the Loren CLI is incomplete (missing ${missingPkg.map((f) => path.relative(pkgProject, f)).join(', ')}). Reinstall it: ${C.CLI_INSTALL}`);
 		return result(1);
 	}
 	const toVersion = readVersion(path.join(pkgRuntime, 'shared')) || 'unknown';
@@ -419,13 +396,11 @@ async function runUpdate(root, opts = {}) {
 	if (project.installedVersion && toVersion !== 'unknown' && compareVersions(project.installedVersion, toVersion) > 0 && !force) {
 		log.error(
 			`This project's runtime (${project.installedVersion}) is newer than this CLI's (${toVersion}). ` +
-				'Update the CLI first: npm i -g loren-framework',
+				`Update the CLI first: ${C.CLI_INSTALL}`,
 		);
 		return result(1, { kind: project.kind });
 	}
 
-	// Plan ----------------------------------------------------------------------------------------
-	// loren/ as a whole, or (Script Sync) the shared and server runtimes in their synced folders.
 	const runtimes = scriptSync
 		? [
 				{ dir: layout.runtimeShared, files: runtimeFiles(path.join(pkgRuntime, 'shared'), noNative) },
@@ -592,8 +567,6 @@ async function runUpdate(root, opts = {}) {
 		log.ok(`Updated to runtime ${toVersion}.${backedUp.length ? ` Backup: ${backupRoot}/` : ''}`);
 	}
 
-	// Sourcemap (after the types, so new files are in it; crit-08). Script Sync has none: Luau-LSP gets
-	// the DataModel from its Studio plugin. --tool none on a Rojo/Argon project skips it too. -----------
 	let exitCode = 0;
 	let tool = null;
 	const run = sourcemapRunner || toolLib.defaultRun;
@@ -641,7 +614,7 @@ async function runUpdate(root, opts = {}) {
 	if (scriptSync && actions.length) {
 		log.info('Studio picks up these file changes through Script Sync. If it shows the conflict dialog, choose Keep Disk.');
 	}
-	if (actions.length) log.info("This updated the project's runtime. To update the Loren CLI itself: npm i -g loren-framework");
+	if (actions.length) log.info(`This updated the project's runtime. To update the Loren CLI itself: ${C.CLI_INSTALL}`);
 	return result(exitCode, {
 		kind: project.kind,
 		fromVersion: fromLabel,

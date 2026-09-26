@@ -1,7 +1,4 @@
 --!strict
--- 2.0 calls from the client: nil holes, -0, non-finite numbers, typed round trips, big payloads
--- (alone in their frame), PayloadTooLarge, the 20-argument limit, returned Promises, Serial FIFO,
--- per-method Timeout, CancelOnTimeout and zombies (the server side is in specs/v2/server/Dispatch).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local V2 = require(script.Parent._V2)
@@ -228,8 +225,6 @@ return function(t: any)
 				local code = r[3].Code
 				expect(code == "Timeout" or code == "Busy").toBe(true)
 			end
-			-- The server abandons them at receipt + 2 (Timeout) + 5 (WatchdogGrace); they stay zombies
-			-- until Hang returns at 12 s. Now is ~8.5 s after the calls.
 			task.wait(6.5)
 			local message = V2.rejection(expect, V2.settle(P:Hang()), "Busy", "Hang")
 			expect(message).toBe(Msg.Busy)

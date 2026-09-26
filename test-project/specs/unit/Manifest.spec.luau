@@ -1,8 +1,4 @@
 --!strict
--- Unit specs for LorenRuntime.Manifest (schema lane; IMPLEMENTATION.md §3.7, §4.7, §10): encode -> decode identity
--- for a model with every member kind, flag and descriptor op; the exact §4.7 byte layout; roots never serialized;
--- deterministic bytes; truncated, garbage, malformed and proto-mismatched input -> nil + reason, never a throw.
--- Runs on the server, no players, no global runtime state (Manifest and Schema are pure).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local C = require(ReplicatedStorage.LorenRuntime.Constants)
 local Codec = require(ReplicatedStorage.LorenRuntime.Codec)
@@ -204,8 +200,6 @@ local function fullModel(root: Instance?): any
 	})
 end
 
--- Hand-written §4.7 bytes. services = { { name, members = { { name, kind, route, flags?, ds?, rate?, burst?,
--- backlog?, desc? } } } }; desc(w) writes the raw args/returns sections.
 local function manual(services: { any }, proto: number?, mirror: number?, trailing: boolean?): buffer
 	local w = wire()
 	w.u8(proto or C.PROTO).str8("2.0.0")

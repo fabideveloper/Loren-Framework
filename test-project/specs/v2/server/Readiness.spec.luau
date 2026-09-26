@@ -1,6 +1,4 @@
 --!strict
--- 2.0 readiness on the server: IsOnFire / IsReady / State, OnReady, repeat SetOnFire, and what
--- V2Service saw in LorenIgnite (Booting) and after awaiting OnReady in LorenBurn (Ready).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage.LorenRuntime.Constants)

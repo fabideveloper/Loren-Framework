@@ -1,8 +1,5 @@
 'use strict';
 
-// loren update, loren types and loren doctor. update and the middleware lint live in
-// lib/update.js and lib/lint.js; these wrappers add the environment checks and exit codes.
-
 const path = require('path');
 const { MIN_NODE, PROJECT_FILE, SHIM_SOURCE, MANAGERS, PROMISE_DIR, SCRIPT_SYNC, SCRIPT_SYNC_PATHS } = require('../constants');
 const { isFile, isDir, readTextIfExists, normalizeEol, walkFiles, rel } = require('../fsutil');
@@ -59,8 +56,6 @@ const failCode = (res) => {
 	return Number.isInteger(code) && code > 0 && code < 256 ? code : 1;
 };
 
-// loren update: runUpdate resolves the tool itself (after updating), so --tool is passed through
-// as given and a missing tool only fails the sourcemap step, never the runtime update.
 async function updateCommand(ctx, opts = {}) {
 	const root = requireProject(ctx.cwd);
 	const runUpdate = ctx.lanes.fn('update', 'runUpdate');

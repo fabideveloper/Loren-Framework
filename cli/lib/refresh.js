@@ -18,8 +18,6 @@ function reasonOf(res, fallback) {
 	return fallback;
 }
 
-// The project's sync tool: --tool wins, else the project's manifests, else what is installed.
-// 'none' is Roblox Script Sync (.loren.json, or --tool none): no program, no sourcemap.
 async function resolveProjectTool(ctx, root, override) {
 	const resolveTool = ctx.lanes.fn('tool', 'resolveTool');
 	let id;

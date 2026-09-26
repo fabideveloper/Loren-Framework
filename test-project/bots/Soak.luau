@@ -1,16 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Soak: long steady load that looks for leaks on the client.
-
-		local bot = Soak.new(proxies, { rate = 30, payloadSize = 64, sampleEvery = 5 })
-		bot:start() ... bot:stop(); bot:waitIdle(12); bot:summary()
-
-	Runs a CallSpammer ("mixed"), and every second churns signal connections (20 Connect +
-	Disconnect on Tick and Changed) and cancels a few calls right after sending them, which
-	exercises the framework's cleanup paths. Samples gcinfo() and Stats memory every sampleEvery
-	seconds; summary().memory reports start/end/max and the least-squares trend in KB/min.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Stats = game:GetService("Stats")

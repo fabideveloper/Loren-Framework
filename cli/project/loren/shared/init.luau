@@ -1,20 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Loren facade (owner lane: lifecycle): ReplicatedStorage.LorenRuntime, the table that
-	ReplicatedStorage.Shared.Loren (the shim) returns.
-	Spec: IMPLEMENTATION.md sections 3.13, 7 and 9.
-
-	- Every function works with `.` and `:` (a leading Loren argument is dropped; Loren.Testing
-	  functions drop a leading Loren.Testing). Each one calls its lane function directly, so a lane
-	  error raised at level 3 points at the caller's line.
-	- IsServer = RunService:IsServer(); IsClient = not IsServer (Studio Run mode and Edit mode boot
-	  as a server).
-	- ServerScriptService.LorenServer is required lazily, on the first server-only call (never on a
-	  client), so shared code has no require edge to server code.
-	- IsOnFire, IsReady and State are written only by Lifecycle.
-	No side effects on require.
-]]
 
 local RunService = game:GetService("RunService")
 
@@ -50,8 +35,6 @@ local function stripTesting(...: any): ...any
 	return ...
 end
 
--- Lazy ServerScriptService.LorenServer (server only). peek = return the cached index or nil.
--- A require the type checker does not trace: shared code has no type-level edge to server code.
 local dynamicRequire: (any) -> any = require :: any
 local serverIndex: any = nil
 local function getServer(peek: boolean?): any

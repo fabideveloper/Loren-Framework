@@ -1,23 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Lifecycle (owner lane: lifecycle): the boot and shutdown state machine on both sides, dependency
-	injection and readiness.
-	Spec: IMPLEMENTATION.md sections 3.11 and 8; robust.md section 5; compat.md section 5.2.
-
-	- SetOnFire creates one root Promise (with an internal :catch, held strongly so a caller's
-	  :cancel() can never cancel it) and runs the boot on a plain thread. Callers get
-	  `root:andThen()` children that resolve with Loren at Ready or reject with the report text.
-	- Every problem found before the first Ignite goes into one report; a failure at any step tears
-	  the network down (Transport.fail / ClientNet.fail), sets State = "Failed", prints the report red
-	  with task.spawn(error, text, 0) (even when nobody handles the Promise), then rejects the root.
-	- Ignite runs in dependency order on its own thread under xpcall; a yielding Ignite is waited for
-	  (the boot thread is resumed exactly once) with warnings, and IgniteTimeout can fail it.
-	- This module is the only writer of Loren.IsOnFire, Loren.IsReady and Loren.State.
-	- `_reset` (Testing.Reset) bumps a generation counter: every thread of an older boot stops
-	  touching state when it resumes.
-	No side effects on require.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -120,11 +102,12 @@ local function plural(n: number, word: string): string
 	return string.format("%d %s%s", n, word, if n == 1 then "" else "s")
 end
 
-local function cycleReport(report: Report, cycles: { string }, strict: boolean)
+-- StrictCycles makes a cycle a boot error; otherwise it is listed only when CycleWarnings is on.
+local function cycleReport(report: Report, cycles: { string }, strict: boolean, listed: boolean)
 	for _, cycle in cycles do
 		if strict then
 			table.insert(report.errors, "Dependency cycle: " .. cycle .. " (StrictCycles is on)")
-		else
+		elseif listed then
 			table.insert(
 				report.warnings,
 				"Dependency cycle: " .. cycle .. " (allowed; inside a cycle, Ignite and Burn run in name order)"
@@ -159,10 +142,6 @@ local function finishFailed(report: Report)
 		table.insert(report.errors, "the boot failed without a reason")
 	end
 	local text = Registry.format(report, true)
-	-- Print before rejecting (as step 10 prints before resolving): the Promise library runs rejection
-	-- handlers and resumes :await() threads synchronously inside reject, so anything after it runs
-	-- after the failure was already observed. Under pcall, so a failing sink can never leave the root
-	-- pending (the default sink's task.spawn(error) reports on its own thread either way).
 	local sinkOk, sinkErr = pcall(errorSink :: any, text)
 	if not sinkOk then
 		Log.warn("the boot-failure error sink failed: " .. tostring(sinkErr))
@@ -207,8 +186,6 @@ end
 
 -- Hooks -----------------------------------------------------------------------------------------------
 
--- Runs module:LorenIgnite() on its own thread. Returns nil on success or the failure text. If the
--- hook yields, the boot thread parks until it ends (resumed exactly once, never after a reset).
 local function ignite(label: string, rec: ModuleRecord, myGen: number): string?
 	local module = rec.module
 	local fn = Registry.field(module, "LorenIgnite")
@@ -316,8 +293,6 @@ local function extinguishBody(track: Tracker, rec: ModuleRecord, fn: any)
 	track.running[rec.name] = nil
 end
 
--- BindToClose (section 8.5): ShuttingDown, NOTICE, LorenExtinguish in reverse order (all started at
--- once, up to SHUTDOWN_BUDGET), then a final flush.
 local function shutdown(myGen: number)
 	if myGen ~= gen or state ~= STATE.Ready then
 		return
@@ -425,7 +400,7 @@ local function serverSteps(ctx: BootCtx, myGen: number, started: number)
 	local order, cycles = Topo.order(names, function(name: string): { string }
 		return services[name].deps
 	end)
-	cycleReport(report, cycles, cfg.StrictCycles)
+	cycleReport(report, cycles, cfg.StrictCycles, cfg.CycleWarnings)
 
 	-- 5. Limits and routes; any error so far fails the boot with the whole report.
 	S.Limits.configure(cfg)
@@ -505,10 +480,6 @@ end
 
 -- Client boot (section 8.3) ---------------------------------------------------------------------------
 
--- What a Controller Dependency that names neither a Controller nor a networked Service resolves to.
--- 1.5.1 gave every Service name a proxy, and the client cannot tell a Service without network
--- members from a typo (the manifest lists networked Services only), so the boot only warns and the
--- name gets this placeholder: any use raises with the reason at the caller's line.
 local function missingDependency(owner: string, dep: string): any
 	local msg = string.format(
 		"%s%s.Dependencies.%s: '%s' is not a Controller or a networked Service %s, so it cannot be used on the client",
@@ -529,8 +500,6 @@ local function missingDependency(owner: string, dep: string): any
 	return table.freeze(placeholder)
 end
 
--- Resolves Controller Dependencies to Controllers and proxies; returns name -> resolved map.
--- An unknown name is a warning (and a placeholder that raises when used), not a boot error.
 local function resolveClientDeps(
 	report: Report,
 	controllers: { [string]: ModuleRecord },
@@ -628,7 +597,7 @@ local function clientSteps(ctx: BootCtx, myGen: number, started: number)
 	local order, cycles = Topo.order(names, function(name: string): { string }
 		return controllers[name].deps
 	end)
-	cycleReport(report, cycles, cfg.StrictCycles)
+	cycleReport(report, cycles, cfg.StrictCycles, cfg.CycleWarnings)
 	if #report.errors > 0 then
 		return failClient(ctx, myGen)
 	end
@@ -740,8 +709,6 @@ function Lifecycle.onReady(): Types.Promise
 	return root:andThen()
 end
 
--- Loren.GetService. Server: the module table (right after AddServices). Client: the proxy (after
--- the manifest). Errors point at the caller of the facade (level 3).
 function Lifecycle.getService(name: string): any
 	if type(name) ~= "string" then
 		error(PREFIX .. "GetService expects a Service name (string), got " .. typeof(name), 3)
@@ -821,9 +788,6 @@ function Lifecycle.setOffline(offline: boolean): ()
 	offlineFlag = offline == true
 end
 
--- The one lookup of the LorenServer folder (server only): a direct child of ServerScriptService
--- (Rojo, Argon), else anywhere below it (Script Sync keeps it in ServerScriptService.Server; one
--- recursive search), else, with `wait`, WaitForChild for a direct child (10 s). nil if missing.
 function Lifecycle.findServerFolder(wait: boolean?): Instance?
 	local ServerScriptService = game:GetService("ServerScriptService")
 	local name = C.Names.ServerFolder
@@ -834,10 +798,6 @@ function Lifecycle.findServerFolder(wait: boolean?): Instance?
 	return inst
 end
 
--- The LorenServer index if the facade already required it, else nil. `load` (server only, for
--- Testing.Reset): also require ServerScriptService.LorenServer when it exists, because specs may have
--- required its modules directly (same module instances, never reset otherwise). Requiring the
--- index has no side effects; the client never loads it.
 function Lifecycle.loadedServer(load: boolean?): any?
 	if serverLoader == nil then
 		return nil
@@ -865,8 +825,6 @@ function Lifecycle._reset(): ()
 		pcall(task.cancel, timer)
 	end
 	table.clear(timers)
-	-- Rejected last: reject runs handlers and resumes :await() threads synchronously, so they must
-	-- see the reset state.
 	local pendingReject = if root ~= nil and root:getStatus() == Promise.Status.Started then rootReject else nil
 	root = nil
 	rootGuard = nil
@@ -893,8 +851,6 @@ function Lifecycle._reset(): ()
 end
 
 Lifecycle._test = table.freeze({
-	-- Replaces the LorenServer index for boots and facade server calls: a table (the fake index),
-	-- a loader function (peek) -> index, or nil to restore the facade loader.
 	setServer = function(server: any)
 		if server == nil then
 			testServer = nil

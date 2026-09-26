@@ -1,23 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Log: every Loren output line goes through here (owner lane: limiter).
-	Spec: IMPLEMENTATION.md sections 0 (Logging rules) and 3.1.
-
-	- `info` prints unthrottled (boot lines only).
-	- `warn`/`warnf`/`once` share one global budget: a token bucket of C.Limit.LOG_LINES_PER_MIN
-	  lines per minute (burst the same). A suppressed line is only counted; the next printed line
-	  ends with " (+N suppressed)".
-	- `warnf` formats only when the budget allows; `warnWith` calls a builder only when it allows,
-	  so a caller never builds a string that would be thrown away.
-	- `studioOnce` prints once per key, only in Studio, outside the budget (developer hints).
-	- Formatting never throws: a bad format string (or argument) prints the raw format instead, and a
-	  failing builder prints a placeholder. `msg` arguments must be strings (typed API).
-
-	No side effects on require. `_reset` restores the require-time state (budget, keys, counters,
-	clock) and the default output sinks (print/warn unless `_test.setDefaultSinks` replaced them).
-	`_test` holds hooks for specs (fake clock, captured output, Studio flag).
-]]
 
 local C = require(script.Parent.Constants)
 
@@ -32,8 +14,6 @@ local realClock = os.clock
 local realPrint: (string) -> () = print
 local realWarn: (string) -> () = warn
 
--- The sinks _reset restores: the real print/warn unless _test.setDefaultSinks replaced them (a test
--- harness capturing Loren's output for a whole phase). Not touched by _reset.
 local defaultPrint: (string) -> () = realPrint
 local defaultWarn: (string) -> () = realWarn
 
@@ -63,8 +43,6 @@ local function refill(): boolean
 	return tokens >= 1
 end
 
--- Refills, then takes one line from the budget if it has one. The token is taken before any string
--- is built, so a builder or __tostring that logs again cannot overdraw the budget.
 local function take(): boolean
 	if refill() then
 		tokens -= 1
@@ -109,8 +87,6 @@ function Log.warnf(fmt: string, ...: any): boolean
 	return true
 end
 
--- Like warn, but the line is `build(...)`, called only when the budget allows.
--- `build` should be a module-level function (no closure per call).
 function Log.warnWith(build: (...any) -> string, ...: any): boolean
 	if not take() then
 		return false
@@ -167,15 +143,10 @@ Log._test = table.freeze({
 		clock = fn or realClock
 		stamp = clock()
 	end,
-	-- Captures output until the next _reset: print lines go to printFn, warn lines to warnFn (nil
-	-- restores the default sink: the real print/warn unless setDefaultSinks replaced it).
 	setSink = function(printFn: ((string) -> ())?, warnFn: ((string) -> ())?)
 		printSink = printFn or defaultPrint
 		warnSink = warnFn or defaultWarn
 	end,
-	-- Replaces the sinks _reset restores AND the current sinks; survives _reset (a harness captures
-	-- Loren's expected warnings for a whole phase although specs call _reset). nil restores the real
-	-- print/warn.
 	setDefaultSinks = function(printFn: ((string) -> ())?, warnFn: ((string) -> ())?)
 		defaultPrint = printFn or realPrint
 		defaultWarn = warnFn or realWarn

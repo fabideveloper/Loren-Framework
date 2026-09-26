@@ -1,17 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	SignalWatcher: measures loss, order and duplicates of an indexed server->client signal.
-
-	The first signal argument must be an increasing integer index (BroadcastService.Tick(i, clock,
-	serverTime) or CounterService.Changed(value) for Increment(1) traffic).
-
-		local w = SignalWatcher.new(proxies.BroadcastService.Signals.Tick, "Tick")
-		w:start() ... w:stop()
-		w:summarize(first, last) -> loss/order stats for the index range [first, last]
-		w:summarize()            -> order stats only (no known range; `gaps` counts skipped indexes)
-		w.maxSeen                highest index received
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

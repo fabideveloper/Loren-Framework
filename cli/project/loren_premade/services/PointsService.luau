@@ -1,8 +1,3 @@
---[[
-	PointsService (premade): per-player points, kept on the server.
-	Other Services call PointsService:AddPoints(player, amount); clients call GetPoints and
-	listen to the PointsChanged signal (see the PointsController premade).
-]]
 local Players = game:GetService("Players")
 
 local PointsService = {

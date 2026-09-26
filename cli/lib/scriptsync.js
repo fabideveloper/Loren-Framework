@@ -1,11 +1,5 @@
 'use strict';
 
-// Roblox Script Sync (`--tool none`): Studio's built-in two-way sync of Folders with directories.
-// There is no project file: .loren.json marks the project ({ "tool": "none", "layout": "scriptsync" })
-// and wins over every other tool hint. Only Scripts, LocalScripts, ModuleScripts and Folders sync,
-// and only Folders can be synced, so LorenRuntime and LorenServer live inside the synced folders
-// (SCRIPT_SYNC_PATHS). Nothing here runs a program.
-
 const path = require('path');
 const { SCRIPT_SYNC, LOREN_CONFIG_FILE, SCRIPT_SYNC_PATHS } = require('./constants');
 const { readTextIfExists, writeText } = require('./fsutil');
@@ -17,8 +11,6 @@ const SYNCED_FOLDERS = Object.freeze(
 	),
 );
 
-// Luau-LSP in plugin mode: the Luau Language Server Companion Studio plugin sends the DataModel,
-// so there is no sourcemap.
 const PLUGIN_SETTINGS = Object.freeze({
 	'luau-lsp.plugin.enabled': true,
 	'luau-lsp.sourcemap.enabled': false,
@@ -61,9 +53,6 @@ function runtimeVersion(runtimeSharedDir) {
 	return m ? m[1] : null;
 }
 
-// Server runtime modules name the shared runtime as ReplicatedStorage.LorenRuntime (IMPLEMENTATION.md
-// section 0). In this layout it is ReplicatedStorage.Shared.LorenRuntime, so installs rewrite that
-// one path (a static path, so Luau-LSP still types the requires). Comments are left alone.
 function serverRuntimeSource(text) {
 	return String(text).replace(/^([ \t]*local[ \t]+[A-Za-z_]\w*[ \t]*=[ \t]*ReplicatedStorage)\.LorenRuntime\b/gm, '$1.Shared.LorenRuntime');
 }

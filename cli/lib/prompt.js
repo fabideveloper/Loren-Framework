@@ -2,8 +2,6 @@
 
 const readline = require('readline');
 
-// Interactive only when both ends are terminals and CI is not set. Every prompt below
-// returns immediately when this is false, so nothing ever waits on a pipe (dx-30).
 function detectTTY(stdin = process.stdin, stdout = process.stdout, env = process.env) {
 	if (env.CI && env.CI !== 'false' && env.CI !== '0') return false;
 	return Boolean(stdin && stdin.isTTY && stdout && stdout.isTTY);
@@ -26,8 +24,6 @@ function askLine(question, { input, output }) {
 	});
 }
 
-// { yes, isTTY, input, output }. `confirm` resolves true only on an explicit yes (or --yes);
-// without a TTY it resolves the default (false unless given), never prompting.
 function createPrompter({ yes = false, isTTY = false, input = process.stdin, output = process.stdout } = {}) {
 	return {
 		yes,

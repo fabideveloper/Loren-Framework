@@ -8,8 +8,6 @@ const bad = (reason) => ({ ok: false, reason });
 
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
-// A Service, Controller, premade or package alias: it becomes an Instance name that code
-// reaches with `.Name`, and a file name. So: a Luau identifier, and no path tricks (dx-23).
 function validateIdentifier(name, what = 'Name') {
 	if (typeof name !== 'string' || name.length === 0) return bad(`${what} is empty.`);
 	if (/[\\/]/.test(name) || name.includes('..')) return bad(`${what} "${name}" must not contain path separators or "..".`);
@@ -24,8 +22,6 @@ function validateIdentifier(name, what = 'Name') {
 
 const isPascalCase = (name) => /^[A-Z]/.test(name);
 
-// The folder `loren init <name>` creates. Friendlier than an identifier ("my-game" is fine),
-// but it must stay one folder inside the current directory.
 function validateProjectName(name) {
 	if (typeof name !== 'string' || name.trim().length === 0) return bad('Project name is empty.');
 	if (name === '.' || name === '..' || name.includes('..')) return bad(`Project name "${name}" must not contain "..".`);
@@ -43,9 +39,6 @@ const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO = /^[A-Za-z0-9._-]{1,100}$/;
 const REF = /^[A-Za-z0-9._/-]{1,200}$/;
 
-// `loren add` input: user/repo, user/repo#ref, github:user/repo, git@github.com:user/repo.git,
-// or any https://github.com/user/repo[.git][/tree/<ref>][#ref] URL (crit-01).
-// Returns { ok, owner, repo, ref, spec } where spec is what degit gets.
 function parseRepoSpec(input) {
 	if (typeof input !== 'string' || input.trim().length === 0) return bad('Repository is empty. Use user/repo.');
 	let s = input.trim();
@@ -89,8 +82,6 @@ function parseRepoSpec(input) {
 	return { ok: true, owner, repo, ref, spec: ref ? `${owner}/${repo}#${ref}` : `${owner}/${repo}` };
 }
 
-// Folder name for a package when the user gives no alias: the repo name without the
-// `roblox-lua-` prefix (1.5.1 behavior), turned into an identifier if it is not one.
 function derivePackageName(repo) {
 	let base = String(repo || '').replace(/\.git$/i, '').replace(/^roblox-lua-/i, '');
 	if (IDENTIFIER.test(base) && !LUAU_KEYWORDS.has(base)) return good(base);

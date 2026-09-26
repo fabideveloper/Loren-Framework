@@ -1,11 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Coordinator: server <-> client harness messages over two plain RemoteEvents, kept apart from
-	the framework under test (the Exploiter skips ReplicatedStorage.LorenTest):
-		TestControl  server -> client  { cmd = "check" | "start" | "stop" | "done", runId, ... }
-		TestReport   client -> server  { kind = "hello" | "check" | "started" | "result" | "log", runId, ... }
-]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -110,8 +104,6 @@ function Coordinator.active(): { Player }
 	return list
 end
 
--- Waits until `expected` clients said hello; or at least one did, nobody else is still loading
--- and none said hello for `settle` s; or `maxWait` s passed. Returns the active clients.
 function Coordinator.waitForClients(expected: number, maxWait: number, settle: number): { Player }
 	local deadline = os.clock() + maxWait
 	while os.clock() < deadline do

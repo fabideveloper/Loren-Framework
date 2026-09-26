@@ -1,11 +1,5 @@
 'use strict';
 
-// Typed dependencies (BLUEPRINT §5, CLI.md M4; dx-01, crit-08, life:corr-19).
-// Writes src/shared/LorenTypes.luau and the server-only src/server/LorenServerTypes.luau from the
-// modules the runtime registers: the direct children of Services/ and Controllers/ (X.luau, X.lua,
-// or a folder with init.luau / init.lua / .src.luau). Both files hold only types and end with
-// `return table.freeze({})`; neither requires a Service or Controller, so no require cycles.
-
 const fs = require('fs');
 const path = require('path');
 const { FOLDERS, TYPES_FILE, SERVER_TYPES_FILE, IDENTIFIER, LUAU_KEYWORDS } = require('./constants');
@@ -110,13 +104,6 @@ function sharedSource({ services, controllers, networked }) {
 	return [
 		'--!strict',
 		HEADER,
-		'--[[',
-		'\tService and Controller names for Dependencies: autocomplete and typo checks. Values stay loose.',
-		'\tController: Dependencies = { "Name" } :: { Types.ClientDependencyName },',
-		'\t            local deps: Types.ClientDeps = self.Dependencies :: any',
-		'\tService:    the same with ServerScriptService.Server.LorenServerTypes (ServiceName, ServerDeps).',
-		'\tNetworkedServiceName: Services with Client methods, Signals, ClientEvents or a Spec.',
-		']]',
 		'',
 		unionType('ServiceName', services),
 		unionType('ControllerName', controllers),
@@ -138,11 +125,6 @@ function serverSource({ services, networked }) {
 	return [
 		'--!strict',
 		HEADER,
-		'--[[',
-		'\tServer only: every Service, including the ones clients never see.',
-		'\tService: Dependencies = { "Name" } :: { ServerTypes.ServiceName },',
-		'\t         local deps: ServerTypes.ServerDeps = self.Dependencies :: any',
-		']]',
 		'',
 		unionType('ServiceName', services),
 		unionType('NetworkedServiceName', networked),
@@ -154,8 +136,6 @@ function serverSource({ services, networked }) {
 	].join('\n');
 }
 
-// What the generated files would list: { services, controllers, networked } (sorted names).
-// Folders: the options, else default.project.json's tree, else the scaffold's defaults.
 function dirsOf(root, opts) {
 	const layout = opts.sharedDir && opts.serverDir && opts.clientDir ? null : projectLayout(root);
 	return {
@@ -186,10 +166,6 @@ function collectNames(root, opts = {}) {
 	};
 }
 
-// generateTypes(root, { sharedDir, serverDir, clientDir, dryRun, log })
-// -> { written, planned, unchanged, files, names }. `written`: the files it wrote (absolute paths);
-// with dryRun nothing is written and `planned` lists what would change. Folders not given come from
-// default.project.json. The server file is only written when the server folder exists.
 function generateTypes(root, opts = {}) {
 	const dirs = dirsOf(root, opts);
 	const names = collectNames(root, { ...opts, sharedDir: dirs.shared, serverDir: dirs.server, clientDir: dirs.client });

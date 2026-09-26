@@ -1,5 +1,3 @@
--- Fixture: plain 1.5.1-style Service that broadcasts an indexed Tick signal.
--- The test harness drives the server-side methods (StartTicking/StopTicking/FireBurst) during scenarios.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Loren = require(ReplicatedStorage.Shared.Loren)

@@ -1,21 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Signal (owner: signals lane). The free runner, connections and the listener classes:
-	LocalSignal (Controller Signals, Testing), ClientSignal (proxy.Signals.X, with the pre-Connect
-	backlog) and ServerEvent (Service.ClientEvents.X, listeners under xpcall).
-	Spec: design/loren-2.0/IMPLEMENTATION.md section 3.8 (blueprint section 4, robust 4.4-4.5 and 4.10 E).
-
-	- Signal.spawn runs a function on a pooled runner thread via task.spawn(thread, fn, ...), so a call
-	  that does not yield allocates no thread. The pool is a small stack (not one slot), so a nested
-	  spawn (a Dispatch runner delivering a ClientEvent to its listeners) also reuses a runner.
-	- Every class shares one listener list: a doubly linked list of connection nodes in connection
-	  order. A fire walks from the head and stops at the last node that existed when it started
-	  (compared by connection serial, so the walk stays right when that tail node itself is
-	  disconnected mid-fire). It skips nodes with Connected == false; a disconnected node keeps
-	  `_next`, so a running fire continues past it.
-	- Requiring this module has no side effects.
-]]
 
 local C = require(script.Parent.Constants)
 local Log = require(script.Parent.Log)
@@ -107,8 +91,6 @@ local function noop(...: any) end
 
 local function runnerCall(me: thread, fn: Fn, ...: any)
 	fn(...)
-	-- Reached only when fn returned (it may have yielded in between). An error ends this thread
-	-- instead (task.spawn reports it), so a failed runner is never pooled again.
 	if idleN < RUNNER_POOL_MAX then
 		idleN += 1
 		idle[idleN] = me
@@ -356,8 +338,6 @@ local function dropOldest(sig: ClientState)
 	end
 end
 
--- Replays one signal's backlog to the listeners connected at each entry's turn.
--- Returns false when Signal._reset ran inside a listener (the new state is not ours to touch).
 local function drain(sig: ClientState, myEpoch: number): boolean
 	while sig._qFirst <= sig._qLast do
 		local i = sig._qFirst
@@ -375,8 +355,6 @@ local function drain(sig: ClientState, myEpoch: number): boolean
 	return true
 end
 
--- One deferred pump drains every signal first-connected before it runs. Signals first-connected by
--- a listener during the pump join the same loop, so no replay ever nests another task.defer.
 local function pumpBody(myEpoch: number)
 	local i = 1
 	while i <= pendingN do
@@ -581,8 +559,6 @@ local function uidOf(player: any): string
 	return tostring(player)
 end
 
--- Runs inside the xpcall handler: decides whether this error gets a log line before any string
--- (traceback included) is built. A client cannot cause more than one line per event per 10 s.
 local function eventErrorText(ev: EventState, err: any): string?
 	local now = clock()
 	if now < ev._logAt or not Log.allowed() then
@@ -755,8 +731,6 @@ local function reset()
 	end
 	allClient = {}
 	backlogDropped = 0
-	-- Pooled runners are this module's own threads: close them (a runner still running a listener
-	-- is not pooled and returns to the fresh pool when it finishes).
 	for i = 1, idleN do
 		local runner = idle[i]
 		if coroutine.status(runner) == "suspended" then

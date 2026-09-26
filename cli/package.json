@@ -1,6 +1,6 @@
 {
   "name": "loren-framework",
-  "version": "2.0.0-alpha.0",
+  "version": "2.0.0-beta.1",
   "description": "CLI for Loren, a Roblox Luau framework: scaffolds projects for Rojo or Argon and updates their runtime.",
   "keywords": [
     "roblox",

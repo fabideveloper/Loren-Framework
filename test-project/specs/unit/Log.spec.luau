@@ -1,6 +1,4 @@
 --!strict
--- Unit spec: LorenRuntime.Log (limiter lane). Runs on the server in Studio (Run mode or Play).
--- Output is captured and the budget runs on a fake clock, so nothing reaches the Output window.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage.LorenRuntime.Constants)
@@ -146,8 +144,6 @@ return function(t: any)
 		end)
 
 		it("formats only when the budget allows", function()
-			-- `%*` (not `%s`): Luau's `%s` takes only strings and numbers (a table raises "string
-			-- expected"); `%*` converts any value with tostring, so __tostring counts the formatting.
 			local conversions = 0
 			local probe = setmetatable({}, {
 				__tostring = function()

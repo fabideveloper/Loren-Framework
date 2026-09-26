@@ -1,7 +1,5 @@
 'use strict';
 
-// update-notifier is ESM-only, so it is loaded with import() and any failure is ignored: an
-// update check must never stop the CLI (dx-22). It only runs in an interactive terminal.
 async function checkForUpdates(pkg, { isTTY, env = process.env, importer = (m) => import(m) } = {}) {
 	if (!isTTY || env.NO_UPDATE_NOTIFIER || env.LOREN_NO_UPDATE_CHECK || env.NODE_ENV === 'test') return false;
 	try {

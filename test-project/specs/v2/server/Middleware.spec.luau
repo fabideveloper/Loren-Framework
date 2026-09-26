@@ -1,7 +1,4 @@
 --!strict
--- 2.0 middleware on the server: README dot style allows (and gets no self), colon style is flagged
--- at boot and denies every call, a throw is an InternalError, a truthy non-true value denies, a
--- returned Promise is awaited, `false, msg` denies with msg; AddMiddleware is boot-time only.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

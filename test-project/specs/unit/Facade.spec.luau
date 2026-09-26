@@ -1,7 +1,4 @@
 --!strict
--- Facade (lifecycle): the Loren table (section 7): fields, the dot and colon form of every function,
--- side rules on the server (IsClient == false in Run mode), errors at the caller's line, and the shim.
--- Client-side rules (GetService proxies, AddControllers) are covered by specs/v2/client. Runs on the server.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -66,8 +63,8 @@ return function(t: any)
 			expect(Loren.IsClient).toBe(false)
 		end)
 
-		it("Version is 2.0.0", function()
-			expect(Loren.Version).toBe("2.0.0")
+		it("Version is a 2.x version", function()
+			expect(string.sub(Loren.Version, 1, 2)).toBe("2.")
 			expect(Loren.Version).toBe(Version.Version)
 			expect(table.isfrozen(Version)).toBe(true)
 		end)
@@ -201,7 +198,7 @@ return function(t: any)
 			expect(Loren.GetStats().Routes).toBe(1)
 			local model = Loren.DumpManifest()
 			expect(Loren:DumpManifest()).toEqual(model) -- a fresh copy each call
-			expect(model.version).toBe("2.0.0")
+			expect(model.version).toBe(Version.Version)
 			expect(model.proto).toBe(C.PROTO)
 			expect(model.services[1].name).toBe("Svc")
 		end)

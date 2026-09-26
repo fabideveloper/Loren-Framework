@@ -1,11 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	LorenTest server. For plans with "check" on 2.0 it first runs specs/unit (offline) and resets
-	the runtime; then it boots Loren (2.0 or 1.5.1, auto-detected) with the fixture Services, or the
-	raw RemoteEvent baseline, waits for the clients, runs ReplicatedStorage.TestConfig.Scenario and
-	prints the REPORT to this (server) Output window.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")

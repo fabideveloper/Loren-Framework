@@ -1,9 +1,4 @@
 --!strict
---[[
-	ClientNet + Proxy (client-net) on the wire, without remotes: the manifest is installed offline,
-	outgoing frames are captured instead of FireServer, server frames are crafted with the Codec and
-	fed as OnClientEvent would, and the clock is fake. Runs on the server (Run mode or Play).
-]]
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage:WaitForChild("LorenRuntime")
@@ -399,8 +394,6 @@ return function(t: any)
 			end
 			expect(total).toBe(6)
 			expect(#fired).toBeGreaterThanOrEqual(3)
-			-- The six sent calls await replies (no server; FAST timeout 120 s, the fake clock is frozen):
-			-- a call stays pending until OK/ERR or its deadline (§3.17 Calls).
 			expect(stats().PendingCalls).toBe(6)
 			-- 2100 nodes: weight about 17 KB (not PayloadTooLarge), but over the node cap
 			local ok, message, info = call(FAST, sidecarTable(2100)):await()

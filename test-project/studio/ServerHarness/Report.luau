@@ -1,9 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Report: formats the server REPORT (all prints start with "(LORENঌ - TEST)" so the Sampler can
-	exclude them from the server log counts).
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

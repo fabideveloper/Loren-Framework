@@ -2,9 +2,8 @@
 
 const path = require('path');
 const { CliError } = require('./errors');
+const { CLI_INSTALL } = require('./constants');
 
-// Modules shared with the update/types/lint/tool work: loaded lazily so one missing or broken
-// file only breaks the commands that need it, and replaceable in tests.
 const LANE_FILES = Object.freeze({ tool: 'tool', types: 'types', lint: 'lint', update: 'update' });
 
 function createLanes(overrides = {}) {
@@ -30,7 +29,7 @@ function createLanes(overrides = {}) {
 			if (typeof f !== 'function') {
 				throw new CliError(
 					`This install of the Loren CLI is incomplete (lib/${LANE_FILES[name]}.js has no ${exportName}).`,
-					'Reinstall it: npm i -g loren-framework',
+					`Reinstall it: ${CLI_INSTALL}`,
 				);
 			}
 			return f;
@@ -38,8 +37,6 @@ function createLanes(overrides = {}) {
 	};
 }
 
-// Lane helpers may return a boolean, an exit code / problem count, a spawn result or an
-// object with ok/exitCode/errors. This turns any of them into { ok, value }.
 function outcome(value) {
 	if (value === undefined || value === null || value === true) return { ok: true, value };
 	if (value === false) return { ok: false, value };

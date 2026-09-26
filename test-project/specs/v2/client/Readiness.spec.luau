@@ -1,7 +1,4 @@
 --!strict
--- 2.0 readiness on the client: IsOnFire / IsReady / State, OnReady, repeat SetOnFire, what
--- V2Controller saw in LorenIgnite (Booting, proxies ready) and LorenBurn, LorenNet as the client
--- sees it, the controller lookups and the server-only facade functions.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local V2 = require(script.Parent._V2)

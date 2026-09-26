@@ -1,6 +1,4 @@
 --!strict
--- Unit spec: LorenRuntime.Codec (codec lane). Pure: no Loren boot and no global runtime state.
--- Runs on the server in Studio (Run mode or Play). IMPLEMENTATION.md §3.5, §4.3, §4.5 and §10 (codec row).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local C = require(ReplicatedStorage.LorenRuntime.Constants)
@@ -120,8 +118,6 @@ end
 
 type Decoded = { n: number, o: number, err: number, errArg: number, argv: { any }, ctx: ReadCtx }
 
--- Decodes one args payload from b[0, lim). hostile = server rules with indexed refs; otherwise
--- client rules with sequential refs.
 local function decodeArgs(
 	b: buffer,
 	hostile: boolean,
@@ -336,8 +332,6 @@ end
 type DatatypeCase = {
 	name: string,
 	make: () -> any, -- a value with one non-finite component (the engine may refuse or sanitize it)
-	-- sums every component walkSidecar checks, so the expectation follows what the engine kept
-	-- (a sanitized or orthonormalized value is judged by the components it really holds)
 	probe: (any) -> number,
 	finite: () -> any,
 }
@@ -1470,8 +1464,6 @@ return function(t: any)
 		end)
 
 		it("reserves ARRAY claims per message: nested headers cannot all claim the same bytes", function()
-			-- 17 nested arrays each announcing ~2030 elements, then padding: the second header already
-			-- passes MAX_NODES claimed, so at most one large table is preallocated
 			local parts = { "01" }
 			for _ = 1, 17 do
 				table.insert(parts, "10 EE 0F") -- ARRAY, varint 2030

@@ -1,14 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	RawServer: the fixture API (Echo/Counter/Inventory/Instance/Broadcast/Dependent) on one plain
-	RemoteEvent, with no framework. It is the "raw" baseline for the compare scenario.
-
-	Wire: C->S FireServer(reqId, service, method, ...args)
-	      S->C FireClient(player, reqId, ok, ...results)     reply
-	      S->C FireClient/FireAllClients("Service.Signal", ...) signal
-	Same validation as the fixture middleware; no rate limiting (that is the point of a raw baseline).
-]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

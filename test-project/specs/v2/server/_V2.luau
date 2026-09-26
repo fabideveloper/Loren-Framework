@@ -1,12 +1,4 @@
 --!strict
---[[
-	Helpers for specs/v2/server (not a spec: the runner only collects "*.spec" modules).
-
-	Server specs test through the public API: the Loren facade and the V2Service module. Most network
-	behavior is driven by the clients' v2 specs, which run at the same time as these; the server side
-	then waits for the evidence V2Service.Probe records. Every evidence wait of the run shares one
-	budget, so a client that never runs its v2 specs costs EVIDENCE_BUDGET seconds once, not per test.
-]]
 
 local LogService = game:GetService("LogService")
 local Players = game:GetService("Players")

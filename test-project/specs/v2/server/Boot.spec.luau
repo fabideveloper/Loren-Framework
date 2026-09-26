@@ -1,6 +1,4 @@
 --!strict
--- 2.0 server boot: LorenNet and its State, both remotes (no RemoteFunction), the shim path, the
--- remotes opened only at Ready, V2Service wiring and the manifest (IMPLEMENTATION.md sections 7-9).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Env = require(ReplicatedStorage.LorenTest.Harness.Env)
@@ -21,7 +19,7 @@ return function(t: any)
 			expect(Env.boot.error).toBeNil()
 			expect(Env.boot.ok).toBe(true)
 			local Loren = V2.loren()
-			expect(Loren.Version).toBe("2.0.0")
+			expect(string.sub(Loren.Version, 1, 2)).toBe("2.")
 			expect(Loren.State).toBe("Ready")
 			expect(rawequal(Loren.GetService("V2Service"), V2.service())).toBe(true)
 		end)

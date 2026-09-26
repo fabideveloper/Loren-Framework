@@ -1,25 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Transport (owner lane: server-net): ReplicatedStorage.LorenNet and its two remotes, players, the
-	C->S envelope, admission, `parse`, HELLO, the flush loop and shutdown.
-	Spec: design/loren-2.0/IMPLEMENTATION.md sections 3.16 (Transport), 4.1-4.4, 4.10 and 8.2.
-
-	Boot: claim (LorenNet, State "Booting", Proto 2) -> prepare (remotes created unparented, their
-	listeners, PlayerAdded/PlayerRemoving then a backfill, the Heartbeat flush) -> open (remotes
-	parented, State "Ready"). fail destroys the remotes and sets State "Failed". Offline boots (Edit
-	mode, Testing.Reset({ Offline = true })) create nothing.
-
-	Receive (section 4.10, exact order): state -> buffer type -> no extra arguments -> frame size ->
-	header and refs envelope -> nmsg -> admission (frame, bytes, messages; a refusal becomes a
-	FrameDropped NOTICE run) -> parse under one pcall backstop. parse walks the sidecar, then reads
-	exactly nmsg length-prefixed messages: HELLO, then CALL / EVENT with the route bucket, the call
-	checks and the decode. Structural failures are violations (the rest of the frame is dropped);
-	semantic ones are BadRequest replies (capped) or counted drops. Nothing is logged per packet.
-
-	Flush: Heartbeat defers one parked coroutine that loops Outbox.flushAll + Dispatch.sweep and
-	yields, so no thread is created per frame.
-]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -172,8 +152,6 @@ end
 local function onHello(ps: PlayerState, now: number): number
 	if ps.helloed then
 		if now - ps.lastHello < REHELLO_MIN then
-			-- Ignored either way. Only HELLOs since the accepted one: the client's retry while its
-			-- MANIFEST is in flight (uplink delay can bunch them), so it is not a violation.
 			return if ps.helloOnly then 0 else V_REPEAT_HELLO
 		end
 		-- The client restarted: its calls are gone.
@@ -516,8 +494,6 @@ function Transport.claim(offline: boolean): (boolean, string?)
 	return true, nil
 end
 
--- Server boot step 7: remotes (unparented) + listeners, players (then a backfill), the Heartbeat
--- flush. Offline: stores the route table only.
 function Transport.prepare(rt: RouteTable, offline: boolean): ()
 	disconnectAll()
 	destroyRemotes()
@@ -585,8 +561,6 @@ function Transport.fail(): ()
 	disconnectAll()
 	destroyRemotes()
 	online = false
-	-- No network from here on and PlayerRemoving is disconnected: forget every player, so their
-	-- outboxes are released and a later Fire is a counted no-op.
 	local list = Outbox.players()
 	for i = #list, 1, -1 do
 		local ps = Outbox.removePlayer(list[i].player)
@@ -599,8 +573,6 @@ function Transport.fail(): ()
 	end
 end
 
--- BindToClose: new calls get ERR ShuttingDown (events still run), every helloed player gets NOTICE
--- ShuttingDown, State "ShuttingDown".
 function Transport.shutdown(): ()
 	if not online then
 		return
@@ -682,8 +654,6 @@ end
 
 -- Spec hooks (section 10): drive the receive path with test doubles and captured fires.
 Transport._test = table.freeze({
-	-- Like prepare(rt, false) without remotes, player events or the Heartbeat loop. Pair it with
-	-- Outbox._test.capture to see what would be fired.
 	attach = function(rt: RouteTable)
 		disconnectAll()
 		destroyRemotes()

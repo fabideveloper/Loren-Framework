@@ -1,8 +1,4 @@
 --!strict
--- 2.0 ClientEvents from the client: reliable Ping (ordered, nil holes kept), unreliable coalesced
--- Aim (only the latest value of a frame is sent), unreliable Ordered Seq (never older than the last),
--- typed Fire errors at the caller, listener isolation on the server. V2Service echoes every
--- arrival back on Signals.Echo, to this player only.
 local V2 = require(script.Parent._V2)
 
 return function(t: any)

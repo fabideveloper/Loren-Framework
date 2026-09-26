@@ -1,13 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Instrument: transparent wrappers around the fixtures' Client methods and Middleware, so the
-	server report can show handler time (os.clock), calls, handler errors and middleware denials.
-
-	Installed before Loren.AddServices (same module tables, via the require cache) and only for
-	load scenarios; "check" runs the fixtures untouched. A wrapper returns exactly what the
-	original returns (all values, nil holes kept) and rethrows the original error value.
-]]
 
 local Instrument = {}
 

@@ -1,6 +1,4 @@
 --!strict
--- Config (lifecycle): every Loren.Configure key (default, type, range, side, NaN/inf), atomic sets,
--- freeze, Members and the SetOnFire cross-checks. IMPLEMENTATION.md sections 3.4 and 6. Runs on the server.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage:WaitForChild("LorenRuntime")
@@ -76,7 +74,7 @@ return function(t: any)
 		Backlog = { good = { 0, 64, 1024 }, bad = { -1, 1025, 1.5 } },
 		BacklogWindow = { good = { 0, 10, 255 }, bad = { -1, 256, 2.5 } },
 	}
-	local BOOLEAN_KEYS = { "CancelOnTimeout", "StrictCycles", "InlineTables", "MiddlewareArityCheck" }
+	local BOOLEAN_KEYS = { "CancelOnTimeout", "StrictCycles", "CycleWarnings", "InlineTables", "MiddlewareArityCheck" }
 	local SERVER_KEYS = {
 		"FrameRate",
 		"FrameBurst",
@@ -115,7 +113,7 @@ return function(t: any)
 				expect(cfg[key]).toBe(value)
 				n += 1
 			end
-			expect(n).toBe(31)
+			expect(n).toBe(32)
 			expect(cfg.Members).toEqual({})
 		end)
 
@@ -147,6 +145,7 @@ return function(t: any)
 			expect(cfg.BacklogWindow).toBe(10)
 			expect(cfg.ForwardErrors).toBe("Studio")
 			expect(cfg.StrictCycles).toBe(false)
+			expect(cfg.CycleWarnings).toBe(false)
 			expect(cfg.InlineTables).toBe(true)
 			expect(cfg.MiddlewareArityCheck).toBe(true)
 			expect(cfg.KickScore).toBe(false)

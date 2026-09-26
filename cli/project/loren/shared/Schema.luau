@@ -1,20 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Schema (owner lane: schema). Loren.T descriptors, Loren.Method/Event/Signal member specs, the boot check,
-	compiled typed payload codecs and descriptor bytes for the manifest.
-	Spec: design/loren-2.0/IMPLEMENTATION.md §3.6 (API and validation), §4.7 (descriptor bytes), §4.8 (typed payloads).
-
-	A compiled codec is an op-list: one Prog per field list (top-level arguments, struct fields, an array element,
-	a map key or value), made of parallel arrays built once by `compile`. Two interpreters walk it: encodeFields
-	(sender checks + writes) and decodeFields (bounds checks + receiver checks + reads). There is no closure per
-	field and nothing is allocated per message except the decoded values themselves.
-
-	Hostile input (a C->S decode on the server) never reaches error(): a failure sets ctx.err and returns. The
-	first failure wins and the decoder stops. On the trusted side (S->C) only structural failures stop the decode;
-	a non-optional Instance that arrives nil is recorded as MISSING_INSTANCE after the whole message is decoded,
-	so the sequential ref cursor stays correct for the next message.
-]]
 
 local C = require(script.Parent.Constants)
 local Types = require(script.Parent.Types)
@@ -44,15 +29,10 @@ type Prog = {
 	emin: { number }, -- ARRAY/MAP: minimum C->S bytes per element / pair
 	smin: { number }, -- ARRAY/MAP: minimum S->C bytes per element / pair (an Instance is 0 bytes S->C)
 	efast: { number }, -- ARRAY: element op for the scalar loop (BOOL, ints, floats), else 0
-	sub: { any }, -- ARRAY element Prog, MAP key Prog, STRUCT Prog, nested OPTIONAL Prog, ENUM items, ENUMITEM Enum,
-	-- INSTANCE class name
+	sub: { any },
 	sub2: { any }, -- MAP value Prog, ENUM name -> index, ENUMITEM Value -> EnumItem, INSTANCE root (or false)
 	anf: boolean, -- AllowNonFinite
 }
-
--- [[ Constants ]] ------------------------------------------------------------------------------------------------
--- Literals (not reads from C) so the compiler folds them into the interpreter branches; checked against
--- Constants.luau below.
 
 local OP_BOOL = 1
 local OP_U8 = 2
@@ -257,8 +237,6 @@ local REF_FREE_TEXT = "Unreliable and Coalesce members need typed Args without T
 -- [[ Helpers ]] --------------------------------------------------------------------------------------------------
 
 local function isInteger(v: any): boolean
-	-- NaN % 1 and inf % 1 are NaN, so non-finite values fail too. The engine can flush a
-	-- subnormal `%` result to zero (5e-324 % 1 == 0), so the floor comparison is also required.
 	return type(v) == "number" and v % 1 == 0 and math.floor(v) == v
 end
 
@@ -275,8 +253,6 @@ local function getEnum(name: string): any
 	return (Enum :: any)[name]
 end
 
--- f32 rounding for T.f32 bounds: the stored bounds are f32 values rounded outward, so every f64 value inside
--- the declared range passes the sender check, and its f32 image (rounding is monotonic) passes the receiver's.
 local f32Scratch = buffer.create(4)
 
 local function toF32(x: number): number
@@ -386,9 +362,6 @@ local function sminOf(d: Descriptor): number
 	end
 	return d.minSize
 end
-
--- Internal constructors: (descriptor, nil) or (nil, reason). They never throw, so readDescriptor can use them
--- on manifest bytes; the public T functions turn a reason into error(level 2).
 
 local function mkInt(op: number, lo: any, hi: any): (Descriptor?, string?)
 	local tlo, thi = INT_LO[op], INT_HI[op]
@@ -740,9 +713,6 @@ DescMeta.__call = function(self: Descriptor, ...: any): Descriptor
 	return d
 end
 DescMeta.__tostring = describe
--- A generic `for k, v in d` on a table whose metatable has __call but no __iter CALLS the table as the iterator
--- (Luau FORGPREP fallback), which would run the refine call above with (nil, nil) and then (nil, key). A
--- descriptor is a frozen table (§3.6), so it iterates its fields like one.
 DescMeta.__iter = function(self: Descriptor)
 	return next, self
 end
@@ -1212,8 +1182,6 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 			sub2[i] = d.root or false
 		end
 	end
-	-- fixed-size runs: consecutive non-optional fixed fields are bounds-checked (decode) and reserved (encode)
-	-- once, at the first field of the run
 	local i = 1
 	while i <= n do
 		if fsz[i] > 0 and not opt[i] then
@@ -1284,8 +1252,6 @@ local function decodePass(ctx: ReadCtx, p: Prog, i: number, o: number): (number,
 	return o, nil
 end
 
--- Encodes the fields of p. Values: struct Progs read src[name] (rawget); others take the varargs in order.
--- Returns C.Encode status (0 = ok); w.errArg names the top-level argument on failure.
 @native
 local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 	local names = p.names
@@ -1698,9 +1664,6 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 	return 0
 end
 
--- Decodes the fields of p from b[o, lim). Root Progs store into dst[i] (argv), struct Progs into dst[name];
--- one-field Progs pass dst = nil and use the returned value. Returns (next offset, last value); on failure
--- ctx.err is set and the offset is <= lim.
 @native
 local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: Prog, dst: any): (number, any)
 	local names = p.names
@@ -1995,16 +1958,11 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 				if hostile then
 					return decodeFail(ctx, D_TOO_LONG, p, i, o)
 				elseif emin == 0 then
-					-- S->C elements of 0 bytes (Instances) have no byte bound; an honest server never writes more
-					-- than the declared max, so a larger count is a corrupt stream (no huge table, no long loop)
 					return decodeFail(ctx, D_OVERRUN, p, i, o)
 				end
 			end
 			if op == OP_ARRAY then
 				local eop = p.efast[i]
-				-- Scalar elements are read at once (the count check above covers them). Other elements
-				-- decode through nested headers that could each claim the same remaining bytes, so a
-				-- hostile count preallocates at most NESTED_PREALLOC slots; the table grows as it fills.
 				local t: { any } =
 					table.create(if hostile and eop == 0 and cnt > NESTED_PREALLOC then NESTED_PREALLOC else cnt) :: any
 				local ep: Prog = p.sub[i]
@@ -2242,8 +2200,6 @@ local function readStr8(b: buffer, o: number, lim: number): (string?, number)
 	return buffer.readstring(b, o + 1, n), o + 1 + n
 end
 
--- (descriptor, next offset), or (nil, offset) when malformed. Never throws. depth = nesting level of this
--- descriptor (1 at the top); the constructors re-check every rule of the public T functions.
 local function readDescriptor(b: buffer, o: number, lim: number, depth: number): (Descriptor?, number)
 	if depth > MAX_DESC_DEPTH or o < 0 or o >= lim then
 		return nil, o

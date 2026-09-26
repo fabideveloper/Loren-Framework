@@ -1,17 +1,8 @@
 --!strict
 --!optimize 2
---[[
-	Metrics: small numeric helpers shared by bots and the server report.
-		Metrics.summarize(samples) -> Summary { n, mean, min, p50, p95, p99, max }
-		Metrics.Reservoir.new(capacity) -> bounded uniform sample of an unbounded stream
-		Metrics.Series (time series) and trend (least-squares slope)
-		Metrics.ms / num / pct / kb formatting
-]]
 
 local Metrics = {}
 
--- type(v) == "table" without narrowing v: a plain typeof() check turns an `any` value into an
--- opaque `table` for the new type solver, and every field read after it becomes `unknown`.
 function Metrics.isTable(v: any): boolean
 	return type(v) == "table"
 end

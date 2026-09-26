@@ -1,21 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	ServerSignal (owner lane: server-net): the `Service.Signals.X` objects (server to client).
-	Spec: design/loren-2.0/IMPLEMENTATION.md sections 3.16 (ServerSignal) and 4.9.
-
-	- Fire(player, ...), FireAll(...), FireFor(players, ...), FireExcept(playerOrPlayers, ...). Each
-	  encodes the message once (head, seq:u16 for Ordered routes, payload via route.args.encode)
-	  into the Outbox scratch writer and commits it to every target: reliable messages go through
-	  the pre-HELLO outbox rules, unreliable ones are dropped before HELLO.
-	- Misuse raises at the caller's line: a bad target, arguments the route's codec refuses
-	  ("<S>.<M>:Fire: arg <i> <EncodeName>"), or an unreliable message over UNRELIABLE_SEAL.
-	- A Player who already left is a counted no-op (GetStats().SignalsDropped).
-	- Connect/Once/Wait/DisconnectAll raise: these are client-side operations.
-	- Ordered routes: one u16 counter per route shared by every player (a broadcast carries one
-	  seq); the first value is 1.
-	- No allocation per Fire (the FireExcept array form reuses one set table).
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -82,8 +66,6 @@ local function isTarget(p: any): boolean
 	return getState(p) ~= nil or isPlayer(p)
 end
 
--- The state of a Fire target: a tracked player, or a Player whose PlayerAdded has not reached Loren
--- yet (deferred events; user connections made before the boot run first). nil = not in the game.
 local function stateOf(player: any): PlayerState?
 	local ps = getState(player)
 	if ps == nil and isPlayer(player) then
@@ -92,8 +74,6 @@ local function stateOf(player: any): PlayerState?
 	return ps
 end
 
--- Encodes one SIGNAL into the scratch writer. Returns (writer, status, detail): detail is the
--- argument index for a C.Encode status, or the message size for TOO_BIG.
 local function encode(route: Route, n: number, ...: any): (Writer, number, number)
 	local w = begin(route.unreliable)
 	writeHead(w, route.id)
@@ -316,8 +296,6 @@ ServerSignal._test = table.freeze({
 		return seqs[routeId] or 0
 	end,
 	routeOf = routeOf,
-	-- Replaces the Player check for targets without a player state (departed test doubles); nil
-	-- restores `typeof(p) == "Instance" and p:IsA("Player")`.
 	setPlayerCheck = function(fn: ((any) -> boolean)?)
 		playerCheck = fn
 	end,

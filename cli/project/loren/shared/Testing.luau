@@ -1,17 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Testing (owner lane: lifecycle): Loren.Testing.Mount / Fired / Emit / Reset.
-	Spec: IMPLEMENTATION.md sections 3.12 and 9; BLUEPRINT.md section 7 (dx-08).
-
-	- Mount wires one module without networking or Ignite: the same validation as a boot, then
-	  Client.Server, Dependencies (mocks), recording Signals objects (Service) or LocalSignals
-	  (Controller), and ServerEvent objects for ClientEvents (driven by Emit).
-	- Reset calls every runtime module's _reset (server modules only if LorenServer was loaded),
-	  restores the declarations Loren replaced, destroys ReplicatedStorage.LorenNet (server) and sets
-	  the offline flag for the next boot.
-	No side effects on require.
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -91,8 +79,6 @@ local function strictMap(service: string, what: string, map: { [string]: any }):
 	}))
 end
 
--- Loren.Testing.Mount(module, { Dependencies?, Kind? = "Service" | "Controller", Name? }).
--- Validation errors point at the caller of the facade (level 3). Ignite is not run.
 function Testing.Mount(module: any, opts: any?): any
 	if type(module) ~= "table" then
 		error(PREFIX .. "Testing.Mount expects a module table, got " .. typeof(module), 3)
@@ -192,8 +178,6 @@ function Testing.Fired(signal: any): { Fired }
 	return list
 end
 
--- Delivers a ClientEvent of a mounted Service as if `player` fired it.
--- A real Signal.ServerEvent shares one metatable; a probe (made on first use, never connected) gives it.
 local eventMeta: any = nil
 local function isServerEvent(v: any): boolean
 	if type(v) ~= "table" then
@@ -223,8 +207,6 @@ local function resetModule(errors: { string }, label: string, mod: any)
 	end
 end
 
--- Loren.Testing.Reset({ Offline = boolean? }): back to the require-time state; Offline makes the next
--- server boot offline (no LorenNet, remotes, players or flush), for unit specs in Play mode.
 function Testing.Reset(opts: any?): ()
 	local offline = false
 	if opts ~= nil then

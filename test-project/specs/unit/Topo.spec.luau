@@ -1,6 +1,4 @@
 --!strict
--- Topo (lifecycle): the Ignite/Burn order and cycle paths. IMPLEMENTATION.md section 3.10.
--- StrictCycles (cycles failing the boot) is covered in Lifecycle.spec. Runs on the server.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage:WaitForChild("LorenRuntime")

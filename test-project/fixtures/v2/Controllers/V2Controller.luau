@@ -1,17 +1,4 @@
 --!strict
---[[
-	V2Controller: the 2.0 client fixture (IMPLEMENTATION.md section 10), registered only when
-	Loren.Version starts with "2.". It records what the facade looked like in LorenIgnite and
-	LorenBurn, and connects to V2Service.Signals.BootSignal LATE (LATE_CONNECT seconds after its
-	Burn), so the BootSignal the server fired before that is delivered from the client backlog.
-
-	V2Controller.Probe (read by specs/v2/client):
-		ignite        { State, IsReady, IsOnFire, HasProxy, SameProxy } in LorenIgnite
-		burnReady     { ok, SameLoren, State, IsReady } after Loren.OnReady():await() in LorenBurn
-		connectedAt   os.clock() of the late BootSignal Connect (nil until then)
-		connectError  the Connect error text, if it raised
-		boot          every BootSignal delivery: { kind, n, at }
-]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

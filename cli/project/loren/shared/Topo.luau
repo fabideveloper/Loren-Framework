@@ -1,16 +1,5 @@
 --!strict
 --!optimize 2
---[[
-	Topo (owner lane: lifecycle): the Ignite/Burn order.
-	Spec: IMPLEMENTATION.md section 3.10; robust.md section 5.5.
-
-	A depth-first post-order over the declared dependencies with names sorted at every level, so the
-	order is deterministic and every dependency outside a cycle comes before its dependents.
-	Dependencies that are not in `names` are skipped (client proxies, unknown names). A back edge adds
-	one cycle string "A -> B -> A". The members of a cycle (a strongly connected component, found with
-	Tarjan's lowlinks during the same walk) are emitted together, in name order, after everything they
-	depend on outside the cycle. Pure: no state, no side effects.
-]]
 
 local Topo = {}
 

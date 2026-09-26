@@ -4,3 +4,19 @@ node_modules
 .cache-loader
 cli/node_modules
 .claude
+devforum-post.md
+design
+
+# Build and tool output
+*.tgz
+sourcemap.json
+*.rbxl
+*.rbxlx
+*.rbxl.lock
+*.rbxlx.lock
+.loren-backup/
+
+# OS and log junk
+.DS_Store
+Thumbs.db
+*.log

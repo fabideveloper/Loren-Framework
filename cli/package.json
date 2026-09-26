@@ -1,13 +1,52 @@
 {
   "name": "loren-framework",
-  "version": "1.5.1",
-  "license": "MIT",
-  "scripts": {
-    "prepublishOnly": "node -e \"require('fs').copyFileSync('../README.md', 'README.md')\""
+  "version": "2.0.0-beta.1",
+  "description": "CLI for Loren, a Roblox Luau framework: scaffolds projects for Rojo or Argon and updates their runtime.",
+  "keywords": [
+    "roblox",
+    "luau",
+    "framework",
+    "rojo",
+    "argon",
+    "networking",
+    "cli"
+  ],
+  "homepage": "https://fabideveloper.github.io/Loren-Framework/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fabideveloper/Loren-Framework.git",
+    "directory": "cli"
   },
-  "main": "index.js",
+  "bugs": {
+    "url": "https://github.com/fabideveloper/Loren-Framework/issues"
+  },
+  "license": "MIT",
+  "author": "Fabi",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "loren": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "project/default.project.json",
+    "project/selene.toml",
+    "project/loren/",
+    "project/src/",
+    "project/loren_premade/services/PointsService.luau",
+    "project/loren_premade/controllers/PointsController.luau",
+    "project/loren_premade/shared/ExampleShared.luau",
+    "project/loren_packages/Promise/default.project.json",
+    "project/loren_packages/Promise/LICENSE",
+    "project/loren_packages/Promise/lib/init.lua",
+    "!project/loren_packages/Promise/README.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
   },
   "dependencies": {
     "commander": "^11.0.0",

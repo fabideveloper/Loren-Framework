@@ -2,14 +2,10 @@ local ExampleController = {
 	Dependencies = {},
 }
 
--- Called when the framework initializes (Synchronous)
-function ExampleController:LorenIgnite()
-	
-end
+-- Runs first, in dependency order, once the server is ready. Set up state here; do not yield.
+function ExampleController:LorenIgnite() end
 
--- Called after all modules are ignited (Asynchronous)
-function ExampleController:LorenBurn()
-	
-end
+-- Runs after every Controller has ignited, each in its own thread.
+function ExampleController:LorenBurn() end
 
 return ExampleController

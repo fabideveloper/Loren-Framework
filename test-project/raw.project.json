@@ -1,0 +1,79 @@
+{
+	"name": "LorenTestRaw",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"LorenPackages": {
+				"$path": "../cli/project/loren_packages"
+			},
+			"TestConfig": {
+				"$className": "Configuration",
+				"$attributes": {
+					"Scenario": "check",
+					"Duration": 20,
+					"Rate": 30,
+					"PayloadSize": 64,
+					"Clients": 0
+				}
+			},
+			"LorenTest": {
+				"$className": "Folder",
+				"LorenTest": {
+					"$path": "runner/LorenTest.luau"
+				},
+				"Harness": {
+					"$path": "studio/Harness"
+				},
+				"Bots": {
+					"$path": "bots"
+				},
+				"RawClient": {
+					"$path": "raw/RawClient.luau"
+				},
+				"Specs": {
+					"$className": "Folder",
+					"StudioClient": {
+						"$path": "specs/studio/client"
+					}
+				}
+			}
+		},
+		"ServerScriptService": {
+			"LorenTestServer": {
+				"$path": "studio/Server.server.luau"
+			}
+		},
+		"ServerStorage": {
+			"LorenTest": {
+				"$className": "Folder",
+				"ServerHarness": {
+					"$path": "studio/ServerHarness"
+				},
+				"RawServer": {
+					"$path": "raw/RawServer.luau"
+				},
+				"Specs": {
+					"$className": "Folder",
+					"Runner": {
+						"$path": "specs/runner"
+					},
+					"StudioServer": {
+						"$path": "specs/studio/server"
+					}
+				}
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"LorenTestClient": {
+					"$path": "studio/Client.client.luau"
+				}
+			}
+		},
+		"Players": {
+			"$properties": {
+				"CharacterAutoLoads": false
+			}
+		}
+	}
+}

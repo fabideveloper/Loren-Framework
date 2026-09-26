@@ -1,20 +1,20 @@
 local ExampleService = {
+	-- Names of other Services this one needs. They start first and appear in self.Dependencies.
 	Dependencies = {},
 
-	-- Functions inside Client are exposed to the network
+	-- Functions clients can call: function ExampleService.Client:Name(player, ...) (self.Server is this Service).
 	Client = {},
 
-	-- List signal names here. Loren injects them automatically.
+	-- Signal names. Loren creates them in self.Signals: self.Signals.Name:Fire(player, ...) or :FireAll(...).
 	Signals = {},
 
-	-- Optional: Security checks for Client functions
 	Middleware = {},
 }
 
--- Called when the framework initializes (Synchronous)
+-- Runs first, in dependency order. Set up state here; do not yield.
 function ExampleService:LorenIgnite() end
 
--- Called after all modules are ignited (Asynchronous)
+-- Runs after every Service has ignited, each in its own thread.
 function ExampleService:LorenBurn() end
 
 return ExampleService

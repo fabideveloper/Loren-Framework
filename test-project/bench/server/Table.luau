@@ -8,8 +8,12 @@ local Table = {}
 
 export type Run = {
 	frames: number,
+	-- Sender frames per second (S->C: server frames; C->S: client 60 Hz ticks, mean over clients).
+	rate: number,
 	sendMs: number,
 	flushMs: number,
+	-- C->S: idle library frame work taken out of flush per tick (frames beyond one per tick, above 60 FPS).
+	flushAdjMs: number?,
 	totalMs: number,
 	recvMs: number?,
 	recvApprox: boolean,
@@ -21,10 +25,14 @@ export type Run = {
 	rxCalls: number,
 	bytes: number,
 	bytesApprox: boolean,
+	-- Computed: bytes x rate / 1000 (per receiver for S->C, per client for C->S). Stats kbps reads 0 on loopback.
 	kbps: number,
+	-- The sender's Stats.DataSendKbps minus idle (after Roblox's compression); JSON only.
 	sendKbps: number,
 	cfps: number,
 	cfpsMax: number,
+	-- C->S: the lowest client tick rate (60 wanted); under 57 the run is INVALID.
+	tickHz: number?,
 	shbP50: number,
 	shbP95: number,
 	hbStat: number?,
@@ -178,7 +186,7 @@ end
 
 function Table.json(row: Row, meta: { [string]: any }): string
 	local body = {
-		v = 1,
+		v = 2,
 		payload = row.payload,
 		lib = row.lib,
 		dir = row.dir,
@@ -238,13 +246,7 @@ local METRICS: { Metric } = {
 		end,
 		higher = false,
 	},
-	{
-		label = "KB/s",
-		get = function(m: Run): number?
-			return m.kbps
-		end,
-		higher = false,
-	},
+	-- Not ranked: KB/s (B/f times each run's frame rate) and sHBwork (engine-wide; whose work it counts is unproven).
 	{
 		label = "cFPS",
 		get = function(m: Run): number?
@@ -256,13 +258,6 @@ local METRICS: { Metric } = {
 		label = "sHB p50",
 		get = function(m: Run): number?
 			return m.shbP50
-		end,
-		higher = false,
-	},
-	{
-		label = "sHBwork",
-		get = function(m: Run): number?
-			return m.hbStat
 		end,
 		higher = false,
 	},
@@ -344,8 +339,8 @@ function Table.summary(payload: string, rows: { Row }): { string }
 			if m.lorenIssues then
 				table.insert(issues, "Loren stats: " .. m.lorenIssues)
 			end
-			if row.dir == "c2s" and m.cfpsMax > 62 then
-				table.insert(issues, string.format("a client ran at %.0f FPS", m.cfpsMax))
+			if row.dir == "c2s" and m.tickHz ~= nil and m.tickHz < 57 then
+				table.insert(issues, string.format("a client held only %.1f of 60 ticks/s", m.tickHz))
 			end
 			if #issues > 0 then
 				table.insert(lines, string.format("  %s: %s", row.lib, table.concat(issues, "; ")))
@@ -356,22 +351,25 @@ function Table.summary(payload: string, rows: { Row }): { string }
 end
 
 Table.LEGEND = "legend: Loren and BlinkBlox pay for validation, size and rate checks; Blink, ByteNet and BridgeNet2 pay for none. "
-	.. "send/flush/recv are ms per sender frame; flush and recv include the library's own Heartbeat/PostSimulation work. "
+	.. "send/flush/recv are ms per sender frame; flush and recv include the library's own Heartbeat/PostSimulation work and what it defers. "
 	.. "recv '~' = server handler span (a lower bound). tx/f = remote calls the sender makes per frame ('*' = from the library's send code, not counted); "
-	.. "rx/f = remote invocations per receiver per frame. B/f '~' = RemotePacketSizeCounter estimate. sHBwork = Stats.HeartbeatTimeMs. "
+	.. "rx/f = remote invocations per receiver per frame. B/f '~' = RemotePacketSizeCounter estimate. "
+	.. "KB/s = B/f x sender frames/s (per receiver for S->C, per client for C->S; 1 KB = 1000 B), computed because Stats kbps reads 0 on loopback. "
+	.. "sHBwork = Stats.HeartbeatTimeMs, a smoothed engine-wide stat (context only, not ranked; see the caveats). "
 	.. "Columns are medians across runs, except lost and reord (worst run)."
 
 Table.CAVEATS = {
 	"caveats:",
-	"- Clients fire C->S on a fixed 60 Hz tick, and a C->S run with a client above 62 FPS is INVALID, so frame rate never changes the load.",
+	"- Clients fire C->S on a fixed 60 Hz tick at any FPS, so frame rate never changes the load; above 60 FPS, C->S flush drops the idle library work of the extra frames (a few us per tick too much for Loren, whose idle work includes empty credit flushes). A client under 57 ticks/s makes the run INVALID.",
 	"- One machine runs the server and every client: run Clients = 1, then 3, and compare numbers within one session only.",
 	"- Studio likely compiles at -O1 unless a file says --!optimize 2 (live games use -O2): BridgeNet2 and most of ByteNet lack it, so they may be slower here than live.",
 	"- Studio compiles --!native code natively, which live clients mostly do not: client numbers for Blink, BlinkBlox and ByteNet are optimistic.",
 	"- recv times Lua only: the engine's own decoding of remote arguments (large for BridgeNet2's tables, tiny for buffers) is outside it; cFPS shows the full client cost.",
-	"- Loren's server Heartbeat flush runs in a deferred thread outside every bracket (near empty after Loren.Flush()); the others' idle frame work is counted.",
+	"- Deferred probes bracket what a library task.defers from Heartbeat/PostSimulation (Loren's server flush thread), so flush and idle work include it.",
+	"- sHBwork (Stats.HeartbeatTimeMs) is engine-wide and smoothed, and may count deferred resumes: a higher value is not proven to be that library's work. Compare it with the idle library work line (deferred work included). Context only.",
 	"- Constant payloads compress well, rand* ones do not; 1000 a frame is over real per-player budgets, so read KB/s and drain, not peaks.",
 	"- GC cannot be forced; warmup and rotation spread it out. SignalBehavior stays Deferred. Loopback network: no latency or loss.",
-	"- All selected libraries stay loaded, so every run also pays the others' idle per-frame work (see the idle library work line).",
+	"- All five libraries stay loaded whatever Library says, so every run also pays the others' idle per-frame work (see the idle library work line).",
 	"- The listener does almost no work, so real games see dispatch overhead as a smaller share of the cost.",
 }
 

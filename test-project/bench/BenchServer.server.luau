@@ -67,6 +67,10 @@ for _, key in settings.runtimes do
 	end
 	local window = Probe.window()
 	local hb, ps = Probe.bracket(window), Probe.bracket(window)
+	local hbd, psd = Probe.bracket(window), Probe.bracket(window)
+	-- Deferred probes outside the sync ones: they also time what the library task.defers (Loren's flush).
+	Probe.openDeferredA(hbd, RunService.Heartbeat)
+	Probe.openDeferredA(psd, RunService.PostSimulation)
 	Probe.openA(hb, RunService.Heartbeat)
 	Probe.openA(ps, RunService.PostSimulation)
 	local started = os.clock()
@@ -77,8 +81,10 @@ for _, key in settings.runtimes do
 	end)
 	Probe.closeB(hb, RunService.Heartbeat)
 	Probe.closeB(ps, RunService.PostSimulation)
+	Probe.closeDeferredB(hbd, RunService.Heartbeat)
+	Probe.closeDeferredB(psd, RunService.PostSimulation)
 	bootMs[key] = (os.clock() - started) * 1000
-	brackets[key] = { Heartbeat = hb, PostSimulation = ps }
+	brackets[key] = { Heartbeat = hb, PostSimulation = ps, HeartbeatDeferred = hbd, PostSimulationDeferred = psd }
 	if ok then
 		for lib, adapter in made do
 			adapters[lib] = adapter

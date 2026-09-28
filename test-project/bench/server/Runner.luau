@@ -22,7 +22,13 @@ local Table = require(script.Parent:WaitForChild("Table"))
 
 local Runner = {}
 
-export type Brackets = { Heartbeat: Probe.Bracket, PostSimulation: Probe.Bracket }
+-- Sync brackets around a library's frame handlers, and deferred ones around what those handlers task.defer.
+export type Brackets = {
+	Heartbeat: Probe.Bracket,
+	PostSimulation: Probe.Bracket,
+	HeartbeatDeferred: Probe.Bracket,
+	PostSimulationDeferred: Probe.Bracket,
+}
 
 export type Context = {
 	settings: Config.Settings,
@@ -40,7 +46,6 @@ export type Context = {
 
 type Idle = {
 	sendKbps: number,
-	recvKbps: number,
 	p50: number,
 	p95: number,
 	libs: { [string]: number },
@@ -50,8 +55,8 @@ type Idle = {
 local DRAIN_QUIET = 2
 local DRAIN_CAP = 30
 local SETTLE_CAP = 120
--- Clients fire C->S on a 60 Hz tick; above this FPS the run is INVALID anyway.
-local MAX_CLIENT_FPS = 62
+-- Clients fire C->S on a 60 Hz tick at any FPS; a client that holds fewer ticks/s sent less load (INVALID).
+local MIN_TICK_HZ = 57
 
 local function broadcast(players: { Player }, message: { [string]: any })
 	for _, player in players do
@@ -148,18 +153,20 @@ local function heartbeat(summary: Sampler.Summary): (number, number)
 	return summary.frameMs.p50, summary.frameMs.p95
 end
 
--- A library's own per-frame work: everything it connected to Heartbeat and PostSimulation (bracketed).
+-- A library's own per-frame work: its Heartbeat and PostSimulation handlers and what they defer (bracketed).
 local function frameWork(br: Brackets?): number
 	if br == nil then
 		return 0
 	end
-	return br.Heartbeat.total + br.PostSimulation.total
+	return br.Heartbeat.total + br.PostSimulation.total + br.HeartbeatDeferred.total + br.PostSimulationDeferred.total
 end
 
 local function resetWork(br: Brackets?)
 	if br then
 		Probe.reset(br.Heartbeat)
 		Probe.reset(br.PostSimulation)
+		Probe.reset(br.HeartbeatDeferred)
+		Probe.reset(br.PostSimulationDeferred)
 	end
 end
 
@@ -212,7 +219,6 @@ local function idlePhase(ctx: Context, seconds: number): Idle
 	local p50, p95 = heartbeat(summary)
 	return {
 		sendKbps = summary.sendKbps.mean,
-		recvKbps = summary.recvKbps.mean,
 		p50 = p50,
 		p95 = p95,
 		libs = libs,
@@ -223,8 +229,10 @@ end
 local function emptyRun(): Table.Run
 	return {
 		frames = 0,
+		rate = 0,
 		sendMs = 0,
 		flushMs = 0,
+		flushAdjMs = nil,
 		totalMs = 0,
 		recvMs = nil,
 		recvApprox = false,
@@ -238,6 +246,7 @@ local function emptyRun(): Table.Run
 		sendKbps = 0,
 		cfps = 0,
 		cfpsMax = 0,
+		tickHz = nil,
 		shbP50 = 0,
 		shbP95 = 0,
 		hbStat = nil,
@@ -309,6 +318,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	local failure: string? = nil
 	local startServer = workspace:GetServerTimeNow()
 	local started = os.clock()
+	local elapsed = 0
 	local connection: RBXScriptConnection
 	connection = RunService.PreSimulation:Connect(function()
 		if finished then
@@ -316,6 +326,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		end
 		if os.clock() - started >= seconds then
 			finished = true
+			elapsed = os.clock() - started
 			connection:Disconnect()
 			flushS += frameWork(brackets)
 			return
@@ -330,6 +341,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		if not ok or not flushed then
 			failure = "fire failed: " .. tostring(if ok then err else result)
 			finished = true
+			elapsed = os.clock() - started
 			connection:Disconnect()
 			return
 		end
@@ -364,6 +376,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 
 	local run = emptyRun()
 	run.frames = frames
+	run.rate = if elapsed > 0 then frames / elapsed else 0
 	local f = math.max(frames, 1)
 	run.sendMs = sendS * 1000 / f
 	run.flushMs = flushS * 1000 / f
@@ -373,7 +386,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	run.sendKbps = summary.sendKbps.mean - idle.sendKbps
 	run.warnings, run.errors = summary.logs.warnings, summary.logs.errors
 
-	local recv, calls, bytes, kbps, fps = {}, {}, {}, {}, {}
+	local recv, calls, bytes, fps = {}, {}, {}, {}
 	local brOk, brN = 0, 0
 	local clientLoren = { EventsLost = 0, SignalsDropped = 0 }
 	for _, player in players do
@@ -395,7 +408,6 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		table.insert(recv, num(r.recvS) * 1000 / f)
 		table.insert(calls, num(r.calls) / f)
 		table.insert(bytes, num(r.bytes) / f)
-		table.insert(kbps, num(r.recvKbps))
 		table.insert(fps, num(r.fps))
 		run.bytesApprox = run.bytesApprox or r.bytesApprox == true
 		if type(r.drainS) == "number" then
@@ -417,8 +429,12 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	run.recvMs = if #recv > 0 then mean(recv) else nil
 	run.rxCalls = mean(calls)
 	run.bytes = mean(bytes)
-	run.kbps = mean(kbps)
+	-- Stats kbps does not register on loopback: per receiver, bytes per sender frame x sender frames/s.
+	run.kbps = run.bytes * run.rate / 1000
 	run.cfps = mean(fps)
+	for _, v in fps do
+		run.cfpsMax = math.max(run.cfpsMax, v)
+	end
 	run.bracket = if brN > 0 then brOk / brN else nil
 	-- Server remote calls: Loren's are counted (FramesOut); the others follow from their send model.
 	local model: Plan.TxModel = runtime.txModel(def)
@@ -439,7 +455,7 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 end
 
 -- One C->S run: every client fires from PreSimulation; the server counts, checks and times its listeners.
-local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: number, idle: Idle): (Table.Run?, string?)
+local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: number, _idle: Idle): (Table.Run?, string?)
 	local changed = checkClients(ctx)
 	if changed then
 		return nil, changed
@@ -541,6 +557,7 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	run.hbStat = if hbN > 0 then hbTotal / hbN else nil
 	run.warnings, run.errors = summary.logs.warnings, summary.logs.errors
 	local sendMs, flushMs, calls, bytes, fps, sendKbps, frameList, senderCalls = {}, {}, {}, {}, {}, {}, {}, {}
+	local ticksPerS, kbps, adjMs = {}, {}, {}
 	local totalFrames, totalN = 0, 0
 	local stopServer = 0
 	local clientLoren = { EventsLost = 0, SignalsDropped = 0 }
@@ -575,12 +592,19 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		end
 		table.insert(sendMs, num(s.sendS) * 1000 / frames)
 		table.insert(flushMs, num(s.flushS) * 1000 / frames)
+		table.insert(adjMs, num(s.adjS) * 1000 / frames)
 		table.insert(fps, num(s.fps))
 		table.insert(sendKbps, num(s.sendKbps))
 		table.insert(calls, (frozen.calls[player] or 0) / frames)
 		local b, approx = Recv.serverBytes(frozen, player)
 		table.insert(bytes, b / frames)
 		run.bytesApprox = run.bytesApprox or approx
+		-- The client's 60 Hz tick rate over its fire window, and its bytes per second (computed, per client).
+		local durS = num(s.durS)
+		if durS > 0 then
+			table.insert(ticksPerS, num(s.frames) / durS)
+			table.insert(kbps, b / durS / 1000)
+		end
 		stopServer = math.max(stopServer, num(s.stopServer))
 		if s.loren ~= nil then
 			table.insert(senderCalls, field(s.loren, "FramesOut") / frames)
@@ -589,8 +613,13 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		end
 	end
 	run.frames = if #frameList > 0 then mean(frameList) else 0
+	run.rate = mean(ticksPerS)
+	for _, v in ticksPerS do
+		run.tickHz = math.min(run.tickHz or math.huge, v)
+	end
 	run.sendMs = mean(sendMs)
 	run.flushMs = mean(flushMs)
+	run.flushAdjMs = if #adjMs > 0 then mean(adjMs) else nil
 	run.totalMs = run.sendMs + run.flushMs
 	run.rxCalls = mean(calls)
 	run.bytes = mean(bytes)
@@ -606,7 +635,7 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		run.txCalls = run.rxCalls
 		run.txDerived = true
 	end
-	run.kbps = (summary.recvKbps.mean - idle.recvKbps) / math.max(#players, 1)
+	run.kbps = mean(kbps)
 	local span = frozen.span
 	run.recvCoverage = if totalN > 0 then span.msgs / totalN else nil
 	if totalFrames > 0 and run.recvCoverage ~= nil and run.recvCoverage >= 0.5 then
@@ -659,12 +688,18 @@ local function medianRun(runs: { Table.Run }): Table.Run?
 	m.frames = med(function(r)
 		return r.frames
 	end) or 0
+	m.rate = med(function(r)
+		return r.rate
+	end) or 0
 	m.sendMs = med(function(r)
 		return r.sendMs
 	end) or 0
 	m.flushMs = med(function(r)
 		return r.flushMs
 	end) or 0
+	m.flushAdjMs = med(function(r)
+		return r.flushAdjMs
+	end)
 	m.totalMs = med(function(r)
 		return r.totalMs
 	end) or 0
@@ -739,10 +774,13 @@ local function medianRun(runs: { Table.Run }): Table.Run?
 		if r.bracket ~= nil then
 			lowest = math.min(lowest or 1, r.bracket)
 		end
-		-- Loss, reordering or a too-fast client in any run shows, even when the median run was clean.
+		-- Loss, reordering or a client short of 60 ticks/s in any run shows, even when the median run was clean.
 		m.lost = math.max(m.lost, r.lost)
 		m.reord = math.max(m.reord, r.reord)
 		m.cfpsMax = math.max(m.cfpsMax, r.cfpsMax)
+		if r.tickHz ~= nil then
+			m.tickHz = math.min(m.tickHz or math.huge, r.tickHz)
+		end
 	end
 	m.bracket = lowest
 	return m
@@ -820,6 +858,14 @@ function Runner.run(ctx: Context)
 		"connect order: server " .. ctx.serverOrder .. " | clients " .. table.concat(clientOrders, ", "),
 		string.format("ETA about %s", fmtTime(eta)),
 	}
+	if settings.quick then
+		table.insert(
+			header,
+			2,
+			"QUICK MODE (Library = loren, for step checkpoints): only the loren and loren-untyped rows run. "
+				.. "All five libraries stay loaded as in a full run, so compare with the Loren rows of the baseline."
+		)
+	end
 	for _, key in settings.runtimes do
 		local runtime = ctx.runtimes[key]
 		local failed = ctx.bootErrors[key]
@@ -833,22 +879,21 @@ function Runner.run(ctx: Context)
 			)
 		)
 	end
-	table.insert(header, "server HeartbeatTime stat: " .. (ctx.hbStat or "not readable"))
+	table.insert(header, "server HeartbeatTime stat (sHBwork, engine-wide): " .. (ctx.hbStat or "not readable"))
 	for _, line in Table.CAVEATS do
 		table.insert(header, line)
 	end
 	Report.print(header)
 
 	local idle = idlePhase(ctx, Plan.IDLE_SECONDS)
-	local idleFps, idleRecv = {}, {}
+	local idleFps = {}
 	for _, player in players do
 		local r = idle.clients[player]
 		if r then
 			table.insert(idleFps, num(r.fps))
-			table.insert(idleRecv, num(r.recvKbps))
 		end
 	end
-	-- Each library's own Heartbeat/PostSimulation work with nothing to send, which every run also pays.
+	-- Each library's own Heartbeat/PostSimulation work (and what it defers) with nothing to send, paid every run.
 	local libParts = {}
 	for _, key in settings.runtimes do
 		local server = idle.libs[key]
@@ -873,13 +918,11 @@ function Runner.run(ctx: Context)
 		end
 	end
 	local idleLine = string.format(
-		"idle | server HB p50/p95 %.1f/%.1f ms | server KB/s send %.1f recv %.1f | clients cFPS %.0f, recv %.1f KB/s",
+		"idle | server HB p50/p95 %.1f/%.1f ms | server Stats send %.1f KB/s | clients cFPS %.0f",
 		idle.p50,
 		idle.p95,
 		idle.sendKbps,
-		idle.recvKbps,
-		mean(idleFps),
-		mean(idleRecv)
+		mean(idleFps)
 	)
 	local idleLibs = "idle library work, ms/frame server/client: " .. table.concat(libParts, " | ")
 	Report.say(idleLine)
@@ -967,8 +1010,8 @@ function Runner.run(ctx: Context)
 			if m.bracket ~= nil and m.bracket < 0.95 then
 				table.insert(invalid, where .. " bracket " .. string.format("%.0f%%", m.bracket * 100))
 			end
-			if row.dir == "c2s" and m.cfpsMax > MAX_CLIENT_FPS then
-				table.insert(invalid, string.format("%s client at %.0f FPS (cap it at 60)", where, m.cfpsMax))
+			if row.dir == "c2s" and m.tickHz ~= nil and m.tickHz < MIN_TICK_HZ then
+				table.insert(invalid, string.format("%s a client held only %.1f of 60 ticks/s", where, m.tickHz))
 			end
 			if row.reliable then
 				if m.lost > 0 then
@@ -1006,7 +1049,7 @@ function Runner.run(ctx: Context)
 		table.insert(report, Table.row(row))
 	end
 	Report.print(report)
-	local meta = { clients = #players, seconds = settings.Seconds, order = ctx.serverOrder }
+	local meta = { clients = #players, seconds = settings.Seconds, order = ctx.serverOrder, quick = settings.quick }
 	for _, row in rows do
 		Report.say(Table.json(row, meta))
 	end

@@ -8,7 +8,9 @@ local Env = require(ReplicatedStorage.LorenTest.Harness.Env)
 
 local V2 = {}
 
-V2.EVIDENCE_BUDGET = 240 -- seconds, shared by every evidence wait of this run
+-- Seconds, shared by every evidence wait of this run. The order round (Order.spec) waits for the slowest
+-- client to reach it, up to ~40 s after its v2 Errors spec produced the Busy evidence.
+V2.EVIDENCE_BUDGET = 330
 V2.TEST_TIMEOUT = V2.EVIDENCE_BUDGET + 30 -- runner timeout for a test that waits for evidence
 V2.HEX8 = "^%x%x%x%x%x%x%x%x$"
 

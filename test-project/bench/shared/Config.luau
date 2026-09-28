@@ -16,6 +16,8 @@ export type Settings = {
 	libs: { string },
 	runtimes: { string },
 	payloads: { string },
+	-- Library = "loren": the step-checkpoint quick mode (only the two Loren rows run).
+	quick: boolean,
 	problem: string?,
 }
 
@@ -23,6 +25,7 @@ export type Settings = {
 Config.LIBS = { "loren", "loren-untyped", "blinkblox", "blink", "bytenet", "bridgenet2" }
 
 -- Runtimes set up in this order: BridgeNet2 first (it must see every PlayerAdded), Loren last (it yields).
+-- Every Library setting loads all of them, so a partial run shares the full run's process state.
 Config.RUNTIMES = { "bridgenet2", "bytenet", "blink", "blinkblox", "loren" }
 
 Config.RUNTIME_OF = {
@@ -70,8 +73,9 @@ function Config.read(): Settings
 		Runs = readNumber(config, "Runs", d.Runs, 1, 15),
 		Warmup = readNumber(config, "Warmup", d.Warmup, 0, 10),
 		libs = {},
-		runtimes = {},
+		runtimes = table.clone(Config.RUNTIMES),
 		payloads = {},
+		quick = false,
 		problem = nil,
 	}
 
@@ -80,18 +84,11 @@ function Config.read(): Settings
 		settings.libs = table.clone(Config.LIBS)
 	elseif lib == "loren" then
 		settings.libs = { "loren", "loren-untyped" }
+		settings.quick = true
 	elseif contains(Config.LIBS, lib) then
 		settings.libs = { lib }
 	else
 		settings.problem = "unknown Library '" .. lib .. "' (all, loren, blinkblox, blink, bytenet, bridgenet2)"
-	end
-	for _, runtime in Config.RUNTIMES do
-		for _, name in settings.libs do
-			if Config.RUNTIME_OF[name] == runtime then
-				table.insert(settings.runtimes, runtime)
-				break
-			end
-		end
 	end
 
 	local payload = settings.Payload

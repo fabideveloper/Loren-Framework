@@ -76,6 +76,8 @@ type ClientRuntime = {
 	remote: { Probe.Bracket },
 	Heartbeat: Probe.Bracket,
 	PostSimulation: Probe.Bracket,
+	HeartbeatDeferred: Probe.Bracket,
+	PostSimulationDeferred: Probe.Bracket,
 }
 
 -- 2. Each library: remote probes A, boot, every bench listener, ready, then probes B.
@@ -99,8 +101,12 @@ for _, key in settings.runtimes do
 		remote = {},
 		Heartbeat = Probe.bracket(window),
 		PostSimulation = Probe.bracket(window),
+		HeartbeatDeferred = Probe.bracket(window),
+		PostSimulationDeferred = Probe.bracket(window),
 	}
 	local remotes: { Instance } = {}
+	Probe.openDeferredA(cr.HeartbeatDeferred, RunService.Heartbeat)
+	Probe.openDeferredA(cr.PostSimulationDeferred, RunService.PostSimulation)
 	Probe.openA(cr.Heartbeat, RunService.Heartbeat)
 	Probe.openA(cr.PostSimulation, RunService.PostSimulation)
 	local ok, err = pcall(function()
@@ -126,6 +132,8 @@ for _, key in settings.runtimes do
 	end
 	Probe.closeB(cr.Heartbeat, RunService.Heartbeat)
 	Probe.closeB(cr.PostSimulation, RunService.PostSimulation)
+	Probe.closeDeferredB(cr.HeartbeatDeferred, RunService.Heartbeat)
+	Probe.closeDeferredB(cr.PostSimulationDeferred, RunService.PostSimulation)
 	cr.counter.sizeOf = runtime.sizeOf
 	if ok then
 		runtimes[key] = cr
@@ -157,7 +165,7 @@ end
 
 -- [[ Run state ]]
 
-type Sample = { t: number, recv: number, send: number }
+type Sample = { t: number, send: number }
 
 type Active = {
 	runId: number,
@@ -174,7 +182,9 @@ type Active = {
 }
 
 local active: Active? = nil
-local idleRecv, idleSend = 0, 0
+local idleSend = 0
+-- Each runtime's own frame work per frame (seconds) in the last idle phase, nothing to send.
+local idleFrameWork: { [string]: number } = {}
 
 -- Connected after every bracket, so its own work is outside every measured window.
 RunService.Heartbeat:Connect(function()
@@ -191,15 +201,13 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
+-- Stats.DataReceiveKbps stays 0 on loopback, so only the send rate is sampled (KB/s is computed from bytes).
 task.spawn(function()
 	while true do
 		task.wait(0.5)
 		local a = active
 		if a then
-			table.insert(
-				a.samples,
-				{ t = workspace:GetServerTimeNow(), recv = Stats.DataReceiveKbps, send = Stats.DataSendKbps }
-			)
+			table.insert(a.samples, { t = workspace:GetServerTimeNow(), send = Stats.DataSendKbps })
 		end
 	end
 end)
@@ -217,19 +225,19 @@ local function framesPerSecond(a: Active, from: number, to: number): number
 	return n / (to - from)
 end
 
-local function rate(a: Active, from: number, to: number, key: "recv" | "send"): number
+local function sendRate(a: Active, from: number, to: number): number
 	local list = {}
 	for _, s in a.samples do
 		if s.t >= from and s.t <= to then
-			table.insert(list, if key == "recv" then s.recv else s.send)
+			table.insert(list, s.send)
 		end
 	end
 	return mean(list)
 end
 
--- A library's own per-frame work: everything it connected to Heartbeat and PostSimulation (bracketed).
+-- A library's own per-frame work: its Heartbeat and PostSimulation handlers and what they defer (bracketed).
 local function frameWork(cr: ClientRuntime): number
-	return cr.Heartbeat.total + cr.PostSimulation.total
+	return cr.Heartbeat.total + cr.PostSimulation.total + cr.HeartbeatDeferred.total + cr.PostSimulationDeferred.total
 end
 
 local function remoteWork(cr: ClientRuntime): number
@@ -246,6 +254,8 @@ local function resetBrackets(cr: ClientRuntime)
 	end
 	Probe.reset(cr.Heartbeat)
 	Probe.reset(cr.PostSimulation)
+	Probe.reset(cr.HeartbeatDeferred)
+	Probe.reset(cr.PostSimulationDeferred)
 end
 
 -- [[ Commands ]]
@@ -259,24 +269,23 @@ local function onIdle(message: any)
 	local connection = RunService.Heartbeat:Connect(function()
 		frames += 1
 	end)
-	local recv, send = {}, {}
+	local send = {}
 	local started = os.clock()
 	while os.clock() - started < seconds do
 		task.wait(0.5)
-		table.insert(recv, Stats.DataReceiveKbps)
 		table.insert(send, Stats.DataSendKbps)
 	end
 	connection:Disconnect()
 	local libs = {}
 	for key, cr in runtimes do
 		libs[key] = (frameWork(cr) + remoteWork(cr)) * 1000 / math.max(frames, 1)
+		idleFrameWork[key] = frameWork(cr) / math.max(frames, 1)
 	end
-	idleRecv, idleSend = mean(recv), mean(send)
+	idleSend = mean(send)
 	report:FireServer({
 		kind = "idled",
 		runId = message.runId,
 		fps = frames / math.max(os.clock() - started, 0.001),
-		recvKbps = idleRecv,
 		sendKbps = idleSend,
 		libs = libs,
 	})
@@ -367,7 +376,6 @@ local function onDrain(message: any)
 		bytes = bytes,
 		bytesApprox = approx,
 		fps = framesPerSecond(a, startServer, stopServer),
-		recvKbps = rate(a, startServer, stopServer, "recv") - idleRecv,
 		drainS = if a.lastAt then math.max(0, (a.lastAt :: number) - stopServer) else nil,
 		capped = capped,
 		check = check,
@@ -407,7 +415,9 @@ local function onDisarm(message: any)
 	active = nil
 end
 
--- C->S: fires on a fixed 60 Hz tick from PreSimulation for `seconds`, timing the fire loop and the flush.
+-- C->S: fires on a fixed 60 Hz tick from PreSimulation for `seconds`, whatever the client's FPS, so the load
+-- never depends on it. flush = the explicit flush calls plus the library's own frame work, less its idle frame
+-- work (from the idle phase) for every frame beyond one per tick: each tick pays one frame of it, as at 60 FPS.
 local function onFire(message: any)
 	local a = active
 	if a == nil or a.runId ~= message.runId or a.step == nil then
@@ -419,16 +429,16 @@ local function onFire(message: any)
 	local runtime = cr.runtime
 	local flush = runtime.flush
 	local seconds = num(message.seconds)
-	Probe.reset(cr.Heartbeat)
-	Probe.reset(cr.PostSimulation)
+	resetBrackets(cr)
 	table.clear(a.frames)
 	table.clear(a.samples)
-	local frames, fired, sendS, flushS = 0, 0, 0, 0
+	local ticks, allFrames, fired, sendS, flushS, workS = 0, 0, 0, 0, 0, 0
 	local acc = 0
 	local finished = false
 	local failure: string? = nil
 	local startServer = workspace:GetServerTimeNow()
 	local started = os.clock()
+	local durS = 0
 	local connection: RBXScriptConnection
 	connection = RunService.PreSimulation:Connect(function(dt: number)
 		if finished then
@@ -436,18 +446,19 @@ local function onFire(message: any)
 		end
 		if os.clock() - started >= seconds then
 			finished = true
+			durS = os.clock() - started
+			workS = frameWork(cr)
 			connection:Disconnect()
-			-- flush = the explicit flush call plus the library's own Heartbeat/PostSimulation work.
-			flushS += frameWork(cr)
 			return
 		end
-		-- One fire per 60 Hz tick at most, so a client above 60 FPS sends the same load.
+		allFrames += 1
+		-- One fire per 60 Hz tick at most (the accumulator keeps the long-run rate at 60/s).
 		acc += dt
 		if acc < TICK * 0.9 then
 			return
 		end
 		acc = math.min(acc - TICK, TICK)
-		local ok, n, s = pcall(step, frames)
+		local ok, n, s = pcall(step, ticks)
 		local flushed, err = true, nil
 		if ok and flush then
 			local t0 = os.clock()
@@ -457,16 +468,23 @@ local function onFire(message: any)
 		if not ok or not flushed then
 			failure = "fire failed: " .. tostring(if ok then err else n)
 			finished = true
+			durS = os.clock() - started
+			workS = frameWork(cr)
 			connection:Disconnect()
 			return
 		end
 		fired += n
 		sendS += s
-		frames += 1
+		ticks += 1
 	end)
 	while not finished do
 		task.wait()
 	end
+	-- A delayed send (e.g. Loren's flush credit) still counts: only the idle baseline of extra frames goes.
+	-- Slightly too much for Loren above 60 FPS (a few us per tick): its idle average includes empty credit
+	-- flushes that a run's non-tick frames skip.
+	local adjS = math.min(workS, math.max(0, allFrames - ticks) * (idleFrameWork[cr.key] or 0))
+	flushS += workS - adjS
 	local stopServer = workspace:GetServerTimeNow()
 	local after = if cr.key == "loren" then lorenStats() else nil
 	active = nil
@@ -475,12 +493,15 @@ local function onFire(message: any)
 		runId = message.runId,
 		ok = failure == nil,
 		error = failure,
-		frames = frames,
+		frames = ticks,
+		allFrames = allFrames,
+		durS = durS,
 		fired = fired,
 		sendS = sendS,
 		flushS = flushS,
+		adjS = adjS,
 		fps = framesPerSecond(a, startServer, stopServer),
-		sendKbps = rate(a, startServer, stopServer, "send") - idleSend,
+		sendKbps = sendRate(a, startServer, stopServer) - idleSend,
 		stopServer = stopServer,
 		loren = if after
 			then {

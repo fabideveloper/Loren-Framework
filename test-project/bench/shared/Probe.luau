@@ -1,7 +1,7 @@
 --!strict
 --!optimize 2
 
--- Bracket probes (A before a library's own connection, B after it) and passive remote counters.
+-- Bracket probes (A before a library's own connection, B after it), deferred probes and passive remote counters.
 local RunService = game:GetService("RunService")
 
 local Probe = {}
@@ -120,6 +120,39 @@ function Probe.closeB(br: Bracket, signal: RBXScriptSignal)
 		end)
 	)
 	br.armed = true
+end
+
+-- A probe that toggles `br` from a deferred thread (one reused coroutine, queued at most once).
+local function deferredToggle(br: Bracket): () -> ()
+	local queued = false
+	local thread = coroutine.create(function()
+		while true do
+			queued = false
+			toggle(br)
+			coroutine.yield()
+		end
+	end)
+	return function()
+		if not queued then
+			queued = true
+			task.defer(thread)
+		end
+	end
+end
+
+-- Deferred probes bracket the threads a library task.defers from its `signal` handlers (Loren's server
+-- flush). Both probes queue a resume, so the FIFO deferred queue runs open, the library's threads, close.
+-- Connect A before the sync probe A and B after the sync probe B, so the sync bracket excludes them.
+function Probe.openDeferredA(br: Bracket, signal: RBXScriptSignal)
+	table.insert(br.connections, signal:Connect(deferredToggle(br)))
+end
+
+-- Arms at the next PreSimulation, so arming never lands between an open and its close in one queue.
+function Probe.closeDeferredB(br: Bracket, signal: RBXScriptSignal)
+	table.insert(br.connections, signal:Connect(deferredToggle(br)))
+	RunService.PreSimulation:Once(function()
+		br.armed = true
+	end)
 end
 
 function Probe.reset(br: Bracket)

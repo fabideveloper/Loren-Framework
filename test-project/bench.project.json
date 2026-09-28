@@ -1,0 +1,100 @@
+{
+	"name": "LorenBench",
+	"globIgnorePaths": ["**/*.md", "**/LICENSE*", "**/*.blink", "**/*.txt", "**/*.toml"],
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"LorenRuntime": {
+				"$path": "../cli/project/loren/shared"
+			},
+			"LorenPackages": {
+				"$path": "../cli/project/loren_packages"
+			},
+			"Shared": {
+				"$className": "Folder",
+				"Loren": {
+					"$path": "../cli/project/src/shared/Loren.luau"
+				}
+			},
+			"TestConfig": {
+				"$className": "Configuration",
+				"$attributes": {
+					"Scenario": "bench",
+					"Library": "all",
+					"Payload": "all",
+					"Seconds": 5,
+					"Runs": 3,
+					"Warmup": 2,
+					"Clients": 0
+				}
+			},
+			"LorenTest": {
+				"$className": "Folder",
+				"Harness": {
+					"$path": "studio/Harness"
+				}
+			},
+			"Bench": {
+				"$className": "Folder",
+				"Shared": {
+					"$path": "bench/shared"
+				},
+				"Libs": {
+					"$className": "Folder",
+					"BlinkBloxClient": {
+						"$path": "bench/libs/blinkblox/Client.luau"
+					},
+					"BlinkClient": {
+						"$path": "bench/libs/blink/Client.luau"
+					},
+					"ByteNet": {
+						"$path": "bench/libs/bytenet"
+					},
+					"BridgeNet2": {
+						"$path": "bench/libs/bridgenet2"
+					}
+				}
+			}
+		},
+		"ServerScriptService": {
+			"LorenServer": {
+				"$path": "../cli/project/loren/server"
+			},
+			"BenchServer": {
+				"$path": "bench/BenchServer.server.luau"
+			}
+		},
+		"ServerStorage": {
+			"Bench": {
+				"$className": "Folder",
+				"Server": {
+					"$path": "bench/server"
+				},
+				"Services": {
+					"$path": "bench/services"
+				},
+				"ServerHarness": {
+					"$path": "studio/ServerHarness"
+				},
+				"BlinkBloxServer": {
+					"$path": "bench/libs/blinkblox/Server.luau"
+				},
+				"BlinkServer": {
+					"$path": "bench/libs/blink/Server.luau"
+				}
+			}
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"BenchClient": {
+					"$path": "bench/BenchClient.client.luau"
+				}
+			}
+		},
+		"Players": {
+			"$properties": {
+				"CharacterAutoLoads": false
+			}
+		}
+	}
+}

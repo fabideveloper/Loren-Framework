@@ -45,6 +45,18 @@ return function(t)
 end
 ```
 
+## Bench place
+
+`bench.project.json` builds a separate place that measures Loren's Signals and ClientEvents against BlinkBlox, Blink, ByteNet and BridgeNet2 (vendored in `bench/libs/`, each with its `LICENSE` and `PROVENANCE.md`).
+
+1. `rojo build bench.project.json -o LorenBench.rbxl`, then open `LorenBench.rbxl` in Studio.
+2. Set the attributes on `ReplicatedStorage.TestConfig`: `Scenario` = `bench`, `Library` = `all` (or `loren`, `blinkblox`, `blink`, `bytenet`, `bridgenet2`), `Payload` = `all` (6 core), `extra`, a payload name or a comma-separated list (`entity100,c2s1000`), `Seconds` (1-60), `Runs` (1-15), `Warmup` (0-10 s).
+3. Set `Clients` to the number of Studio clients you start (1, then 3). `0` (auto) works too, but a client that joins late makes the whole run INVALID.
+4. **Test > Clients and Servers**: 1 client, then 3 (in Play solo, BridgeNet2 is n/a if the player joined before the server script ran). Keep the clients at 60 FPS: a C->S run with a client above 62 FPS is INVALID. The defaults take about 14 min.
+5. Read the server Output: a table per payload, then the REPORT, one `BENCH_JSON` line per row, the SUMMARY and `RESULT: DONE|INVALID` (also in `TestConfig.LastResult`).
+
+Layout: `bench/BenchServer.server.luau`, `bench/BenchClient.client.luau`, `bench/shared/` (Config, Payloads, Plan, Probe, Recv, `Adapters/`), `bench/server/` (Runner, Table), `bench/services/LorenBench.luau`. Compare numbers only within one session: everything shares one machine.
+
 ## Add a bot
 
 Write a module in `bots/` with `new`, `start`, `stop`, `waitIdle(seconds)` and `summary()`, then give it a role in `studio/Client.client.luau` (`startPhase`) and in `studio/ServerHarness/Scenarios.luau` (`roleFor`, `paramsFor`, `evaluate`).

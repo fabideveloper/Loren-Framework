@@ -1,0 +1,4 @@
+# Vendored files stay byte-identical to upstream (and to the sha256 values in PROVENANCE.md) on every checkout.
+*.luau text eol=lf
+*.blink text eol=lf
+LICENSE* text eol=lf

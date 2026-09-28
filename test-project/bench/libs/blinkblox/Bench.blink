@@ -1,0 +1,61 @@
+-- Shared Loren signal benchmark schema, BlinkBlox dialect (compiler v0.41.2).
+-- Same logical events as ../blink/Bench.blink; differences are marked "BlinkBlox:".
+option ClientOutput = "./Client.luau"
+option ServerOutput = "./Server.luau"
+-- Own remote names, so it can live in one place with upstream Blink.
+option RemoteScope = "BLINKBLOX"
+-- BlinkBlox's best config for many small unreliable events (Loren batches unreliable too).
+option BatchUnreliable = true
+-- The bench fires far faster than an honest client; raise the inbound limits (as BlinkBlox's own
+-- benchmark/definitions/Definition.blink does) so the server measures work, not refusals.
+option MaxPacketSize = 2097152
+option MaxEventsPerPacket = 4096
+option InboundBytesPerSecond = 1073741824
+option InboundBurst = 1073741824
+
+-- 2 + 12 + 12 + 1 + 1 (3 flags share one bitfield byte) = 28 bytes (+1 event id)
+struct Entity {
+	id: u16,
+	position: vector,
+	orientation: vector,
+	health: u8,
+	alive: boolean,
+	moving: boolean,
+	crouched: boolean
+}
+
+-- 2 + 1 + 1 + 4 + 1 (2 flags in one bitfield byte) = 9 bytes (+1 event id)
+struct Input {
+	seq: u16,
+	moveX: i8,
+	moveZ: i8,
+	yaw: f32,
+	jump: boolean,
+	sprint: boolean
+}
+
+-- [[ Server -> Client ]]
+
+-- 1000 fires a frame, `true` or random.
+event SBool { From: Server, Type: Reliable, Call: SingleSync, Data: boolean }
+-- Extra: BlinkBlox's own headline payload (boolean[1000] -> 125 bytes + length).
+event SBoolArray { From: Server, Type: Reliable, Call: SingleSync, Data: boolean[0..1000] }
+-- 100 fires a frame; Fire(player) and FireAll (broadcast) scenarios.
+event SEntity { From: Server, Type: Reliable, Call: SingleSync, Data: Entity }
+-- Extra: the same 100 entities as one array fire.
+event SEntities { From: Server, Type: Reliable, Call: SingleSync, Data: Entity[0..100] }
+-- Opt-in unreliable variant of SEntity.
+event SEntityUnreliable { From: Server, Type: Unreliable, Call: SingleSync, Data: Entity }
+-- Extra: CFrame cost. BlinkBlox: CFrame<quat> = 12 position + 7 rotation = 19 bytes.
+event SPose { From: Server, Type: Reliable, Call: SingleSync, Data: CFrame<quat> }
+
+-- [[ Client -> Server ]]
+-- BlinkBlox: a per-player Rate is set on every client event (never reached by the bench) so the
+-- token-bucket check is paid, as Loren always pays its rate limit before a handler runs.
+
+event CBool { From: Client, Type: Reliable, Call: SingleSync, Rate: 1000000, Data: boolean }
+event CBoolArray { From: Client, Type: Reliable, Call: SingleSync, Rate: 1000000, Data: boolean[0..1000] }
+event CEntity { From: Client, Type: Reliable, Call: SingleSync, Rate: 1000000, Data: Entity }
+-- 1000 fires a frame.
+event CInput { From: Client, Type: Reliable, Call: SingleSync, Rate: 1000000, Data: Input }
+event CInputUnreliable { From: Client, Type: Unreliable, Call: SingleSync, Rate: 1000000, Data: Input }

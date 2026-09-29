@@ -19,7 +19,7 @@ Some limits are fixed by the wire format. Others are budgets with defaults you c
 | Values in copied (sidecar) tables, per client frame | 2048 | The client starts a new frame. More in one message: `BadArgument`. |
 | Sidecar slots (Instances, CFrames, copied tables) per client frame | 255 | The client starts a new frame. More in one message: `BadArgument`. |
 | One client message | 64 KiB | `PayloadTooLarge`; an event `Fire` raises an error. |
-| Client reliable frame | 16 KiB | The next message starts a new frame. |
+| Client reliable frame | 60 KiB | The next message starts a new frame. |
 | Messages in one client frame | About 540 by default (`MessageBurst × MirrorFraction`, at most 1024) | The next message starts a new frame. The server treats more than 1024 as a violation. |
 | Frame size the server accepts | 72 KiB reliable, 1000 bytes unreliable | Dropped as a violation. |
 | Server frame | 64 KiB | A larger message goes alone. There's no cap from server to client. |

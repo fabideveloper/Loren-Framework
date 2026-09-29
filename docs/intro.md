@@ -97,7 +97,7 @@ We measured all of this in Roblox Studio:
 | Exploiter bot, 48,190 garbage packets at about 2,400 a second | 0 accepted. Honest players: 1,206 of 1,206 calls OK. Server frame time unchanged (p99 6.1 ms), 0 server warnings. |
 | The same attack on 1.5.1 | 47,364 warnings (about 142k a minute), a server frame about 3x slower, route ids stolen through the handshake RemoteFunction, 43 handler crashes from crafted packets. |
 | Stress, 3 players at 60 calls a second each | 100% of calls OK, 0 lost or reordered signals, about 1.8 µs average handler cost, round trip p50 about 15 ms on one machine. |
-| Test suite, with 1 and 3 players | 1,212 tests passed, 0 failed. |
+| Test suite, with 3 players | 1,555 tests passed, 0 failed. |
 
 The CLI's own suite (141 tests, run with Node) passes too, including real Rojo and Argon runs.
 

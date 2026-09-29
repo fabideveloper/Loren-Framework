@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.0-beta.2
+
+Networking is much faster, and nothing in your code has to change. Install it with `npm i -g loren-framework@next`, then run `loren update` in your project.
+
+**Faster** (Roblox Studio, 1 player, work per game frame)
+- 1,000 Signal messages in one frame: receiving is about 5x faster (about 1.0 ms down to 0.18 ms), sending about 3x (0.46 ms down to 0.14 ms).
+- 100 entity updates in one frame: receiving is about 2x faster, sending about 1.7x.
+- 1,000 client events in one frame: the client sends them about 3x faster, and the server handles them about 2x faster.
+- A client packs up to 60 KB into one send instead of 16 KB, so heavy client traffic needs fewer remote calls (1 a frame instead of 4 in our untyped test).
+
+**Changed**
+- Each Signal carries its own `Fire`, `FireAll`, `FireFor` and `FireExcept`. Calls work as before. You'd only notice it if you loop over a Signal with `pairs`, or compare the `Fire` of two Signals.
+- Signal and ClientEvent listeners run on a reused thread instead of a new thread for every message. A listener that yields still doesn't hold up the others, and errors are caught as before.
+- The shim's "LorenRuntime missing" error starts with `(LORENঌ)`, like every other Loren message. `loren update` replaces the old shim (it calls it "a changed shim") and keeps a backup.
+
+**The same as beta.1**
+- The message format, error messages, rate limits, counters and every security check. In Studio all 1,555 tests pass, and the exploiter bot still gets 0 of 48,783 junk packets through.
+
 ## 2.0.0-beta.1
 
 The first 2.0 beta. Your 1.5.1 Services and Controllers keep working as they are. Install it with `npm i -g loren-framework@next`, then run `loren update` in your project.

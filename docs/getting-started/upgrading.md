@@ -28,7 +28,7 @@ npm i -g loren-framework@next
 loren --version
 ```
 
-It should print `2.0.0-beta.1`. The CLI carries the runtime, so a newer CLI is what brings 2.0 to your project.
+It should print `2.0.0-beta.2`. The CLI carries the runtime, so a newer CLI is what brings 2.0 to your project.
 
 ## 2. Preview the update
 

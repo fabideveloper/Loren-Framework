@@ -52,7 +52,7 @@ When frames go out:
 - That adds at most one Heartbeat of delay on the server, and at most 1/61 of a second on the client.
 - `Loren.Flush()` sends now. On the client it still respects the 61-a-second limit, so it may wait for the next slot.
 
-A client frame closes at 16 KiB and the next message starts a new one (a single larger message, up to 64 KiB, goes alone). Server frames close at 64 KiB, and a larger message goes alone. An unreliable fire is at most 900 bytes.
+A client frame closes at 60 KiB and the next message starts a new one (a single larger message, up to 64 KiB, goes alone). Server frames close at 64 KiB, and a larger message goes alone. An unreliable fire is at most 900 bytes.
 
 ## What a frame looks like
 

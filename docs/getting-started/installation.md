@@ -14,7 +14,7 @@ loren --version
 ```
 
 That installs the `loren` command. You need [Node.js](https://nodejs.org/) 18 or newer. `loren --version` should
-print `2.0.0-beta.1`.
+print `2.0.0-beta.2`.
 
 :::info[Beta]
 Loren 2.0 is in beta, so it's published on npm's `next` tag. The default tag, `latest`, is still 1.5.1, which means

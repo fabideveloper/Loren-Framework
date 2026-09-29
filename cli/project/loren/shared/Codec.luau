@@ -1248,7 +1248,7 @@ local function beginFrame(ctx: ReadCtx, refs: { any }?, nrefs: number)
 	ctx.errArg = 0
 end
 
--- Per message (the ref cursor is per frame and is kept).
+-- Per message (the ref cursor is per frame and is kept). Inlined in ClientNet.decodeFrame and Transport.parse.
 local function beginMessage(ctx: ReadCtx, allowNonFinite: boolean)
 	ctx.err = 0
 	ctx.errArg = 0

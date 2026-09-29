@@ -39,6 +39,7 @@ export type ClientRoute = {
 	args: Types.PayloadCodec, -- Method/Event: C->S encode; Signal: S->C decode
 	returns: Types.PayloadCodec | false, -- Method: S->C decode
 	signal: Types.ClientSignal | false, -- Signal routes
+	scalar: number, -- Signal routes: Schema.scalarOp of the Args, read inline by decodeFrame (0 = the codec decodes)
 }
 
 -- A C->S frame being filled or waiting in a channel queue (pooled).
@@ -68,6 +69,27 @@ type Channel = {
 	ringEvents: { number }, -- events in that frame
 }
 
+-- An S->C frame being received: pass 1 decodes it into `tape`, pass 2 delivers it. The first 5 fields: a Signal.Cursor.
+type Batch = {
+	owner: number,
+	busy: boolean,
+	pos: number, -- tape index of the entry being delivered
+	node: any,
+	stop: number,
+	gen: number, -- generation at receive: a reset stops the frame
+	n: number, -- tape slots in use (0 between segments)
+	high: number, -- most slots used since `tape` was made (its array is at most 2x this, or TAPE_CAP0)
+	tape: { any }, -- entries in frame order (E_* layouts below)
+	now: number, -- the frame's clock (Ordered checks)
+	refs: { any }?, -- the frame's refs (nil between frames)
+	p: number, -- where pass 1 goes on after a SPLIT
+	cursor: number, -- refs consumed before `p`
+	decoding: boolean, -- pass 1 is running (a throw there still delivers the complete entries)
+	why: string?, -- STOP: the structural error, reported after the tape (as `abort` does)
+	route: ClientRoute?,
+	num: number?,
+}
+
 local Limit = C.Limit
 local Op = C.Op
 local Err = C.Err
@@ -82,6 +104,11 @@ local PREFIX = C.PREFIX
 local KIND_METHOD = Kind.Method
 local KIND_EVENT = Kind.Event
 local KIND_SIGNAL = Kind.Signal
+local deliver = Signal.ClientSignal.deliver
+local deliverIn = Signal.ClientSignal.deliverIn
+local deliverIn1 = Signal.ClientSignal.deliverIn1
+local quiet = Signal.ClientSignal.quiet
+local drive = Signal.drive
 local HEADER = C.C2S_HEADER
 local CAT = Names.MemoryCategory
 local ENCODE_OK = C.Encode.OK
@@ -113,6 +140,51 @@ local PHASE_IDLE = 0
 local PHASE_CONNECTING = 1
 local PHASE_READY = 2
 local PHASE_FAILED = 3
+
+-- Tape entries. Every per-message effect (counters, logs, call state, user code) happens in pass 2, at its entry.
+local E_SIGNAL = 1 -- [E_SIGNAL, signal, argc, args...]: MessagesIn, then the listeners
+local E_SKIP = 2 -- [E_SKIP, messages, dropped]: Signals that deliver nothing (stale Ordered, a typed Instance nil)
+local E_OK = 3 -- [E_OK, req, req.gen, argc, values...]
+local E_MISSING = 4 -- [E_MISSING, req, req.gen]: an OK whose typed Instance arrived nil
+local E_BAD = 5 -- [E_BAD, req, req.gen]: an OK that failed to decode (always the last entry)
+local E_ERR = 6 -- [E_ERR, req, req.gen, code, msg, data, incident]
+local E_NOTICE = 7 -- [E_NOTICE, kind, first, count]
+local DONE = 0 -- pass 1: decoded to the end of the frame
+local SPLIT = 1 -- pass 1: deliver the tape first, then decode on from b.p (see decodeFrame)
+local STOP = 2 -- pass 1: a structural error (b.why) ends the frame after the tape
+local TAPE_CAP0 = 1024
+local TAPE_KEEP = 16384 -- a tape that held more slots is replaced after its frame
+
+-- Schema ops that decodeFrame reads inline (O1); constants, so the compiler folds them
+local S_BOOL = 1
+local S_U8 = 2
+local S_U16 = 3
+local S_U32 = 4
+local S_I8 = 5
+local S_I16 = 6
+local S_I32 = 7
+local S_F32 = 8
+local S_F64 = 9
+local S_VECTOR3 = 12
+local F32_ABS = 0x7FFFFFFF -- f32 bits without the sign: 0 is zero, below F32_NORMAL subnormal, above F32_INF NaN
+local F32_NORMAL = 0x00800000
+local F32_INF = 0x7F800000
+do
+	local op = C.SchemaOp
+	assert(
+		op.BOOL == S_BOOL
+			and op.U8 == S_U8
+			and op.U16 == S_U16
+			and op.U32 == S_U32
+			and op.I8 == S_I8
+			and op.I16 == S_I16
+			and op.I32 == S_I32
+			and op.F32 == S_F32
+			and op.F64 == S_F64
+			and op.VECTOR3 == S_VECTOR3,
+		PREFIX .. "ClientNet scalar ops are out of sync with Constants.luau"
+	)
+end
 
 local ClientNet = {}
 
@@ -256,6 +328,12 @@ local failedIds: { number } = {}
 local nfailed = 0
 local callIdAt = 0 -- offset of the callId in the scratch writer (set by encodeMessage)
 local abortLogged = false
+local spare: Batch? = nil -- the batch the next frame decodes into (a nested receive gets a new one)
+local fillN = 0 -- tape slots of complete entries (pass 1)
+local claimed: { [Req]: boolean } = {} -- calls replied to earlier on the tape being filled
+local claimedList: { Req } = {} -- the same calls in a list, so unclaim is O(replies), not O(the set's capacity)
+local claimedN = 0
+local lastClear = 0 -- tape slots the last clearTape touched (spec hook)
 
 -- Stats
 local framesIn, bytesIn, messagesIn = 0, 0, 0
@@ -641,9 +719,8 @@ end
 
 -- Incoming --------------------------------------------------------------------------------------------
 
--- The log text is built only for the first abort (`route` and `num` add detail to `reason`).
+-- "Dropped the rest of a server frame", where the one-pass decoder stopped; the text is built for the first one only.
 local function abort(reason: string, route: ClientRoute?, num: number?)
-	table.clear(argv)
 	if abortLogged then
 		return
 	end
@@ -771,6 +848,7 @@ local function install(m: Types.ManifestModel)
 				args = args,
 				returns = returns,
 				signal = signal,
+				scalar = if kind == KIND_SIGNAL then Schema.scalarOp(mem.args) else 0,
 			}
 			table.freeze(route :: any)
 			newRoutes[id] = route
@@ -821,116 +899,288 @@ local function install(m: Types.ManifestModel)
 	phase = PHASE_READY
 end
 
--- Decodes one server frame. Returns early (after `abort`) on a structural error.
-local function decodeFrame(frame: buffer, refs: { any }?)
+-- Forgets the calls pass 1 claimed (after each pass 1, and on a fault or reset).
+local function unclaim()
+	for i = 1, claimedN do
+		claimed[claimedList[i]] = nil
+		claimedList[i] = nil :: any
+	end
+	claimedN = 0
+end
+
+-- Pass 1 ends at a structural error: it is reported (abort) after the entries before it are delivered.
+local function stop(b: Batch, why: string, route: ClientRoute?, num: number?): number
+	table.clear(argv)
+	b.why = why
+	b.route = route
+	b.num = num
+	return STOP
+end
+
+-- Pass 1, b.p on into b.tape: no user code, no visible effect; a lookup the tape could change waits for it (SPLIT).
+@native
+local function decodeFrame(b: Batch, frame: buffer): number
+	local tape = b.tape
 	local len = buffer.len(frame)
-	local gen = generation
-	local now = clock()
+	local now = b.now
 	local rctx = ctx
-	Codec.beginFrame(rctx, refs, 0)
-	local p = 0
+	Codec.beginFrame(rctx, b.refs, 0)
+	rctx.cursor = b.cursor
+	local k = 0
+	local skipAt = 0 -- the E_SKIP entry at the tape's end (0 = none): a run of skipped Signals shares one
+	local dropSeen = false -- a FrameDropped NOTICE is on the tape
+	local p = b.p
 	while p < len do
-		local h, q = Codec.readHead(frame, p, len)
+		local h, q = buffer.readu8(frame, p), p + 1 -- the 1-byte route head inline (p < len): as Codec.readHead
+		if h == 0 or h > 0xDF then
+			h, q = Codec.readHead(frame, p, len)
+		end
 		if h > 0 then
 			-- SIGNAL
 			local route = routes[h]
 			if route == nil or route.kind ~= KIND_SIGNAL then
-				return abort("unknown or non-Signal route", nil, h)
+				return stop(b, "unknown or non-Signal route", nil, h)
 			end
 			local seq = -1
 			if route.ordered then
 				if q + 2 > len then
-					return abort("truncated signal")
+					return stop(b, "truncated signal")
 				end
 				seq = buffer.readu16(frame, q)
 				q += 2
 			end
-			Codec.beginMessage(rctx, route.allowNonFinite)
-			local n
-			n, q = route.args.decode(frame, q, len, rctx, argv)
-			local e = rctx.err
-			if e ~= 0 and e ~= DECODE_MISSING then
-				return abort("bad payload", route)
-			end
-			messagesIn += 1
-			if seq >= 0 and not acceptSeq(h, seq, now) then
-				clearArgv(n) -- stale (decoded to keep the offset and ref cursor right)
-			elseif e == DECODE_MISSING then
-				clearArgv(n)
-				signalsDropped += 1
-			else
-				debug.resetmemorycategory()
-				Signal.ClientSignal.deliver(route.signal :: Types.ClientSignal, table.unpack(argv, 1, n))
-				debug.setmemorycategory(CAT)
-				clearArgv(n)
-				if generation ~= gen then
-					return
+			local n = -1
+			local e = 0 -- the decode status: after an inline read rctx.err is stale, so nothing below may read it
+			local v1: any = nil -- the value of a 1-argument message (argv holds the others)
+			local sop = route.scalar
+			if sop ~= 0 then
+				-- O1: as decodeFields reads it on the trusted side; what this cannot take goes to the codec (same error)
+				if sop == S_BOOL then
+					if q < len then
+						local x = buffer.readu8(frame, q)
+						if x == 1 then
+							v1 = true
+							n = 1
+							q += 1
+						elseif x == 0 then
+							v1 = false
+							n = 1
+							q += 1
+						end
+					end
+				elseif sop == S_VECTOR3 then
+					if q + 12 <= len then
+						local mx = bit32.band(buffer.readu32(frame, q), F32_ABS)
+						local my = bit32.band(buffer.readu32(frame, q + 4), F32_ABS)
+						local mz = bit32.band(buffer.readu32(frame, q + 8), F32_ABS)
+						-- native code builds Vector3.new(readf32) without the f32 -> f64 -> f32 trip decodeFields makes
+						if
+							(mx == 0 or (mx >= F32_NORMAL and mx <= F32_INF))
+							and (my == 0 or (my >= F32_NORMAL and my <= F32_INF))
+							and (mz == 0 or (mz >= F32_NORMAL and mz <= F32_INF))
+						then
+							-- zero, normal and infinite: that trip keeps them in every float mode; the codec takes the rest
+							v1 = Vector3.new(
+								buffer.readf32(frame, q),
+								buffer.readf32(frame, q + 4),
+								buffer.readf32(frame, q + 8)
+							)
+							n = 1
+							q += 12
+						end
+					end
+				elseif sop == S_F32 then
+					if q + 4 <= len then
+						v1 = buffer.readf32(frame, q)
+						n = 1
+						q += 4
+					end
+				elseif sop == S_U8 then
+					if q < len then
+						v1 = buffer.readu8(frame, q)
+						n = 1
+						q += 1
+					end
+				elseif sop == S_U16 then
+					if q + 2 <= len then
+						v1 = buffer.readu16(frame, q)
+						n = 1
+						q += 2
+					end
+				elseif sop == S_U32 then
+					if q + 4 <= len then
+						v1 = buffer.readu32(frame, q)
+						n = 1
+						q += 4
+					end
+				elseif sop == S_I8 then
+					if q < len then
+						v1 = buffer.readi8(frame, q)
+						n = 1
+						q += 1
+					end
+				elseif sop == S_I16 then
+					if q + 2 <= len then
+						v1 = buffer.readi16(frame, q)
+						n = 1
+						q += 2
+					end
+				elseif sop == S_I32 then
+					if q + 4 <= len then
+						v1 = buffer.readi32(frame, q)
+						n = 1
+						q += 4
+					end
+				elseif sop == S_F64 then
+					if q + 8 <= len then
+						v1 = buffer.readf64(frame, q)
+						n = 1
+						q += 8
+					end
 				end
 			end
+			if n < 0 then
+				-- Codec.beginMessage, inline
+				rctx.err = 0
+				rctx.errArg = 0
+				rctx.nodes = 0
+				rctx.claimed = 0
+				rctx.allowNonFinite = route.allowNonFinite
+				n, q = route.args.decode(frame, q, len, rctx, argv)
+				e = rctx.err
+				if e ~= 0 and e ~= DECODE_MISSING then
+					return stop(b, "bad payload", route)
+				end
+				if n == 1 then
+					v1 = argv[1]
+					argv[1] = nil
+				end
+			end
+			-- -1: delivered. 0: stale Ordered (decoded to keep the offset and ref cursor right). 1: an Instance nil.
+			local dropped = -1
+			if seq >= 0 and not acceptSeq(h, seq, now) then
+				dropped = 0
+			elseif e == DECODE_MISSING then
+				dropped = 1
+			end
+			if dropped >= 0 then
+				clearArgv(n)
+				if skipAt > 0 then
+					tape[skipAt + 1] += 1
+					tape[skipAt + 2] += dropped
+				else
+					skipAt = k + 1
+					tape[k + 1] = E_SKIP
+					tape[k + 2] = 1
+					tape[k + 3] = dropped
+					k += 3
+				end
+			else
+				tape[k + 1] = E_SIGNAL
+				tape[k + 2] = route.signal
+				tape[k + 3] = n
+				if n == 1 then
+					tape[k + 4] = v1
+				elseif n == 2 then
+					tape[k + 4], tape[k + 5] = argv[1], argv[2]
+					argv[1], argv[2] = nil, nil
+				elseif n == 3 then
+					tape[k + 4], tape[k + 5], tape[k + 6] = argv[1], argv[2], argv[3]
+					argv[1], argv[2], argv[3] = nil, nil, nil
+				elseif n > 3 then
+					table.move(argv, 1, n, k + 4, tape)
+					clearArgv(n)
+				end
+				k += 3 + n
+				skipAt = 0
+			end
+			fillN = k
 			p = q
 		elseif h < 0 then
 			local op = -h
 			if op == Op.OK then
 				if q + 2 > len then
-					return abort("truncated OK")
+					return stop(b, "truncated OK")
 				end
 				local req = Calls.lookup(buffer.readu16(frame, q))
-				if req == nil then
-					return abort("OK for an unknown call id")
+				if k > 0 and (req == nil or dropSeen or claimed[req]) then
+					b.p = p
+					b.cursor = rctx.cursor
+					return SPLIT
+				elseif req == nil then
+					return stop(b, "OK for an unknown call id")
 				end
+				claimed[req] = true
+				claimedN += 1
+				claimedList[claimedN] = req
 				q += 2
 				local route: ClientRoute = req.route
-				Codec.beginMessage(rctx, route.allowNonFinite)
+				-- Codec.beginMessage, inline
+				rctx.err = 0
+				rctx.errArg = 0
+				rctx.nodes = 0
+				rctx.claimed = 0
+				rctx.allowNonFinite = route.allowNonFinite
 				local n
 				n, q = (route.returns :: PayloadCodec).decode(frame, q, len, rctx, argv)
 				local e = rctx.err
 				if e ~= 0 and e ~= DECODE_MISSING then
-					if Calls.isPending(req) then
-						debug.resetmemorycategory()
-						Calls.reject(req, Err.InternalError, nil, nil, nil, nil)
-						debug.setmemorycategory(CAT)
-					end
-					return abort("bad reply", route)
+					tape[k + 1] = E_BAD
+					tape[k + 2] = req
+					tape[k + 3] = req.gen
+					fillN = k + 3
+					return stop(b, "bad reply", route)
 				end
-				messagesIn += 1
-				if not Calls.isPending(req) then
+				if e == DECODE_MISSING then
 					clearArgv(n)
-					Calls.late(req)
-				elseif e == DECODE_MISSING then
-					clearArgv(n)
-					debug.resetmemorycategory()
-					Calls.reject(req, Err.MissingInstance, nil, nil, nil, nil)
-					debug.setmemorycategory(CAT)
+					tape[k + 1] = E_MISSING
+					tape[k + 2] = req
+					tape[k + 3] = req.gen
+					k += 3
 				else
-					debug.resetmemorycategory()
-					Calls.resolve(req, table.unpack(argv, 1, n))
-					debug.setmemorycategory(CAT)
-					clearArgv(n)
+					tape[k + 1] = E_OK
+					tape[k + 2] = req
+					tape[k + 3] = req.gen
+					tape[k + 4] = n
+					if n == 1 then
+						tape[k + 5] = argv[1]
+						argv[1] = nil
+					elseif n > 1 then
+						table.move(argv, 1, n, k + 5, tape)
+						clearArgv(n)
+					end
+					k += 4 + n
 				end
-				if generation ~= gen then
-					return
-				end
+				skipAt = 0
+				fillN = k
 				p = q
 			elseif op == Op.ERR then
 				if q + 4 > len then
-					return abort("truncated ERR")
+					return stop(b, "truncated ERR")
 				end
 				local req = Calls.lookup(buffer.readu16(frame, q))
-				if req == nil then
-					return abort("ERR for an unknown call id")
+				if k > 0 and (req == nil or dropSeen or claimed[req]) then
+					b.p = p
+					b.cursor = rctx.cursor
+					return SPLIT
+				elseif req == nil then
+					return stop(b, "ERR for an unknown call id")
 				end
+				claimed[req] = true
+				claimedN += 1
+				claimedList[claimedN] = req
 				local code = buffer.readu8(frame, q + 2)
 				local flags = buffer.readu8(frame, q + 3)
 				q += 4
 				if bit32.band(flags, bit32.bnot(ERR_FLAGS_KNOWN)) ~= 0 then
-					return abort("bad ERR flags")
+					return stop(b, "bad ERR flags")
 				end
 				local msg: string? = nil
 				if bit32.btest(flags, ErrFlag.Msg) then
 					local mlen
 					mlen, q = Codec.readVarint(frame, q, len)
 					if mlen < 0 or mlen > ERR_MSG_MAX or mlen > len - q then
-						return abort("bad ERR message")
+						return stop(b, "bad ERR message")
 					end
 					msg = buffer.readstring(frame, q, mlen)
 					q += mlen
@@ -940,106 +1190,390 @@ local function decodeFrame(frame: buffer, refs: { any }?)
 					Codec.beginMessage(rctx, true)
 					data, q = Codec.readValue(frame, q, len, rctx, 0)
 					if rctx.err ~= 0 then
-						return abort("bad ERR data")
+						return stop(b, "bad ERR data")
 					end
 				end
 				local incident: number? = nil
 				if bit32.btest(flags, ErrFlag.Incident) then
 					if q + 4 > len then
-						return abort("truncated ERR incident")
+						return stop(b, "truncated ERR incident")
 					end
 					incident = buffer.readu32(frame, q)
 					q += 4
 				end
-				messagesIn += 1
-				if Calls.isPending(req) then
-					local arg: number? = nil
-					if code == Err.BadRequest then
-						arg = if type(data) == "number" then data else 0
-						data = nil
-						badRequests += 1
-					elseif code == Err.RateLimited then
-						callsRateLimited += 1
-					elseif code == Err.Busy then
-						busyReplies += 1
-					elseif code < 1 or code > C.WIRE_ERR_MAX then
-						Log.once("cn:errcode", "the server sent an unknown error code " .. code)
-						code = Err.InternalError
-						msg = nil
-						data = nil
-						incident = nil
-					end
-					debug.resetmemorycategory()
-					Calls.reject(req, code, msg, data, incident, arg)
-					debug.setmemorycategory(CAT)
-					if generation ~= gen then
-						return
-					end
-				else
-					Calls.late(req)
-				end
+				tape[k + 1] = E_ERR
+				tape[k + 2] = req
+				tape[k + 3] = req.gen
+				tape[k + 4] = code
+				tape[k + 5] = msg
+				tape[k + 6] = data
+				tape[k + 7] = incident
+				k += 7
+				skipAt = 0
+				fillN = k
 				p = q
 			elseif op == Op.NOTICE then
 				if q + 5 > len then
-					return abort("truncated NOTICE")
+					return stop(b, "truncated NOTICE")
 				end
 				local kind = buffer.readu8(frame, q)
-				local first = buffer.readu16(frame, q + 1)
-				local count = buffer.readu16(frame, q + 3)
-				q += 5
-				messagesIn += 1
 				if kind == Notice.FrameDropped then
-					framesDropped += count
-					eventsLost += ringLost(rel, first, count)
-					debug.resetmemorycategory()
-					callsRateLimited += Calls.dropped(first, count)
-					debug.setmemorycategory(CAT)
-					if generation ~= gen then
-						return
-					end
-				elseif kind == Notice.UFrameDropped then
-					framesDropped += count
-					eventsLost += ringLost(unr, first, count)
-				elseif kind == Notice.ShuttingDown then
-					shuttingDown = true
-				elseif kind == Notice.OutboxOverflow then
-					outboxDropped += count
-					Log.studioOnce(
-						"cn:outbox",
-						count
-							.. " server messages to this client were dropped before it connected (pre-HELLO outbox full)"
-					)
-				end -- unknown kinds are ignored (the body is always 5 bytes)
-				p = q
+					dropSeen = true
+				end
+				tape[k + 1] = E_NOTICE
+				tape[k + 2] = kind
+				tape[k + 3] = buffer.readu16(frame, q + 1)
+				tape[k + 4] = buffer.readu16(frame, q + 3)
+				k += 4
+				skipAt = 0
+				fillN = k
+				p = q + 5
 			elseif op == Op.MANIFEST then
 				if q + 4 > len then
-					return abort("truncated MANIFEST")
+					return stop(b, "truncated MANIFEST")
 				end
 				local mlen = buffer.readu32(frame, q)
 				q += 4
 				if mlen > len - q then
-					return abort("truncated MANIFEST")
+					return stop(b, "truncated MANIFEST")
 				end
 				if model == nil then
+					if k > 0 then
+						-- Never from a real server (a first MANIFEST opens its frame): installed after the tape.
+						b.p = p
+						b.cursor = rctx.cursor
+						return SPLIT
+					end
 					local m, reason = Manifest.decode(frame, q, q + mlen)
 					if m == nil then
 						manifestError = reason or "malformed manifest"
-						return abort("malformed MANIFEST")
+						return stop(b, "malformed MANIFEST")
 					end
 					local ok, err = pcall(install :: any, m)
 					if not ok then
 						manifestError = tostring(err)
-						return abort("unusable MANIFEST")
+						return stop(b, "unusable MANIFEST")
 					end
 				end -- a MANIFEST after the first (repeat HELLO) is skipped by its length
 				p = q + mlen
 			else
-				return abort("unexpected control op", nil, op)
+				return stop(b, "unexpected control op", nil, op)
 			end
 		else
-			return abort("bad route head")
+			return stop(b, "bad route head")
 		end
 	end
+	return DONE
+end
+
+-- ERR for a pending call: counters and the unknown-code rule, then the rejection (user code).
+local function rejectErr(req: Req, code: number, msg: string?, data: any, incident: number?)
+	local arg: number? = nil
+	if code == Err.BadRequest then
+		arg = if type(data) == "number" then data else 0
+		data = nil
+		badRequests += 1
+	elseif code == Err.RateLimited then
+		callsRateLimited += 1
+	elseif code == Err.Busy then
+		busyReplies += 1
+	elseif code < 1 or code > C.WIRE_ERR_MAX then
+		Log.once("cn:errcode", "the server sent an unknown error code " .. code)
+		code = Err.InternalError
+		msg = nil
+		data = nil
+		incident = nil
+	end
+	Calls.reject(req, code, msg, data, incident, arg)
+end
+
+-- A NOTICE, in its place among the frame's other messages.
+local function applyNotice(kind: number, first: number, count: number)
+	if kind == Notice.FrameDropped then
+		framesDropped += count
+		eventsLost += ringLost(rel, first, count)
+		local n = Calls.dropped(first, count) -- rejects the dropped calls (user code)
+		callsRateLimited += n
+	elseif kind == Notice.UFrameDropped then
+		framesDropped += count
+		eventsLost += ringLost(unr, first, count)
+	elseif kind == Notice.ShuttingDown then
+		shuttingDown = true
+	elseif kind == Notice.OutboxOverflow then
+		outboxDropped += count
+		Log.studioOnce(
+			"cn:outbox",
+			count .. " server messages to this client were dropped before it connected (pre-HELLO outbox full)"
+		)
+	end -- unknown kinds are ignored (the body is always 5 bytes)
+end
+
+-- The call was released after pass 1's lookup (ClientNet.fail, a spec's sweep): the one-pass lookup failed here.
+local function released(req: Req, g: number): boolean
+	return req.gen ~= g or Calls.lookup(req.id) ~= req
+end
+
+-- Pass 2 on a runner (Signal.drive): Signal and E_SKIP entries from b.pos; any other entry or a Backlog one ends it.
+@native
+local function deliverBody(b: Batch, me: number)
+	local tape = b.tape
+	local n = b.n
+	local gen = b.gen
+	local t = b.pos
+	-- After a reset, a takeover still ends its message's listeners (the one-pass decoder's `fire` did), then stops.
+	while t <= n and (generation == gen or b.node ~= nil) do
+		local kind = tape[t]
+		if kind == E_SIGNAL then
+			local argc = tape[t + 2]
+			local a = t + 3
+			if b.node == nil then
+				messagesIn += 1 -- a takeover goes on after b.node: its message is already counted
+			end
+			local ok
+			if argc == 1 then
+				ok = deliverIn1(b, me, tape[t + 1], tape[a])
+			elseif argc == 0 then
+				ok = deliverIn(b, me, tape[t + 1])
+			elseif argc == 2 then
+				ok = deliverIn(b, me, tape[t + 1], tape[a], tape[a + 1])
+			elseif argc == 3 then
+				ok = deliverIn(b, me, tape[t + 1], tape[a], tape[a + 1], tape[a + 2])
+			else
+				ok = deliverIn(b, me, tape[t + 1], table.unpack(tape, a, a + argc - 1))
+			end
+			if ok ~= true then
+				if ok == nil then
+					messagesIn -= 1 -- Backlog: deliverTape counts and queues it on the receiving thread, as before B2
+					break
+				end
+				return -- this runner yielded or was left behind: the owner goes on
+			end
+			t = a + argc
+			b.pos = t
+		elseif kind == E_SKIP then
+			messagesIn += tape[t + 1]
+			signalsDropped += tape[t + 2]
+			t += 3
+			b.pos = t
+		else
+			break
+		end
+	end
+	b.busy = false
+end
+
+-- Pass 2 on the receiving thread: every entry's effects at its place, a Signal run on deliverBody. False: frame ends.
+@native
+local function deliverTape(b: Batch): boolean
+	local tape = b.tape
+	local n = b.n
+	local gen = b.gen
+	local t = b.pos
+	while t <= n do
+		if generation ~= gen then
+			return false -- a reset in user code: the one-pass decoder stopped here too
+		end
+		local kind = tape[t]
+		if kind == E_SIGNAL then
+			local sig = tape[t + 1]
+			local argc = tape[t + 2]
+			local a = t + 3
+			local after = a + argc
+			if after > n or quiet(sig) then -- the last entry, no listener or Backlog: Signal's own path, as before B2
+				messagesIn += 1
+				if argc == 1 then
+					deliver(sig, tape[a])
+				elseif argc == 0 then
+					deliver(sig)
+				elseif argc == 2 then
+					deliver(sig, tape[a], tape[a + 1])
+				elseif argc == 3 then
+					deliver(sig, tape[a], tape[a + 1], tape[a + 2])
+				else
+					deliver(sig, table.unpack(tape, a, after - 1))
+				end
+				t = after
+			else
+				b.pos = t
+				b.node = nil
+				b.busy = true
+				if not drive(deliverBody, b) then
+					error("a delivery runner stopped outside a listener", 0)
+				end
+				t = b.pos
+			end
+		elseif kind == E_SKIP then
+			messagesIn += tape[t + 1]
+			signalsDropped += tape[t + 2]
+			t += 3
+		elseif kind == E_NOTICE then
+			local nk, first, count = tape[t + 1], tape[t + 2], tape[t + 3]
+			t += 4
+			messagesIn += 1
+			applyNotice(nk, first, count)
+		else -- a reply: E_OK, E_ERR, E_MISSING or E_BAD
+			local req: Req = tape[t + 1]
+			if released(req, tape[t + 2]) then
+				abort(if kind == E_ERR then "ERR for an unknown call id" else "OK for an unknown call id")
+				return false
+			end
+			if kind == E_OK then
+				local argc = tape[t + 3]
+				local a = t + 4
+				t = a + argc
+				messagesIn += 1
+				if not Calls.isPending(req) then
+					Calls.late(req)
+				elseif argc == 1 then
+					Calls.resolve(req, tape[a])
+				elseif argc == 0 then
+					Calls.resolve(req)
+				elseif argc == 2 then
+					Calls.resolve(req, tape[a], tape[a + 1]) -- O23: unpack from a > 1 is the slow path
+				elseif argc == 3 then
+					Calls.resolve(req, tape[a], tape[a + 1], tape[a + 2])
+				else
+					Calls.resolve(req, table.unpack(tape, a, t - 1))
+				end
+			elseif kind == E_ERR then
+				local code, msg, data, incident = tape[t + 3], tape[t + 4], tape[t + 5], tape[t + 6]
+				t += 7
+				messagesIn += 1
+				if Calls.isPending(req) then
+					rejectErr(req, code, msg, data, incident)
+				else
+					Calls.late(req)
+				end
+			elseif kind == E_MISSING then
+				t += 3
+				messagesIn += 1
+				if Calls.isPending(req) then
+					Calls.reject(req, Err.MissingInstance, nil, nil, nil, nil)
+				else
+					Calls.late(req)
+				end
+			else -- E_BAD: never counted (the one-pass decoder dropped the frame before counting it)
+				if Calls.isPending(req) then
+					Calls.reject(req, Err.InternalError, nil, nil, nil, nil)
+				end
+				abort(b.why :: string, b.route, b.num) -- the last entry; logged even after a reset, as before B2
+				return false
+			end
+		end
+	end
+	return true
+end
+
+-- Empties slots [1, n] in O(n): table.clear walks the whole array (at most 2 x `high`), so only for 4n >= that.
+@native
+local function clearTape(b: Batch, n: number)
+	b.n = 0
+	if n <= 0 then
+		return
+	end
+	local tape = b.tape
+	local high = b.high
+	if n > high then
+		high = n
+		b.high = n
+	end
+	local cap = if 2 * high > TAPE_CAP0 then 2 * high else TAPE_CAP0
+	if 4 * n >= cap then
+		table.clear(tape)
+		lastClear = cap
+	else
+		for i = 1, n do
+			tape[i] = nil
+		end
+		lastClear = n
+	end
+	if n > TAPE_KEEP then
+		b.tape = table.create(TAPE_CAP0) -- after a burst the big array is not kept (the old one is empty)
+		b.high = 0
+	end
+end
+
+-- Pass 1 then pass 2, for each segment of the frame (one, unless decodeFrame SPLITs). Under onFrame's pcall.
+local function receive(b: Batch, frame: buffer)
+	while true do
+		fillN = 0
+		b.decoding = true
+		debug.setmemorycategory(CAT)
+		local status = decodeFrame(b, frame)
+		debug.resetmemorycategory()
+		b.decoding = false
+		if claimedN > 0 then
+			unclaim()
+		end
+		local n = fillN
+		if n > 0 then
+			b.n = n
+			b.pos = 1
+			local going = deliverTape(b)
+			clearTape(b, n)
+			if not going then
+				return
+			end
+		end
+		if generation ~= b.gen then
+			return
+		elseif status == STOP then
+			abort(b.why :: string, b.route, b.num)
+			return
+		elseif status ~= SPLIT then
+			return
+		end
+	end
+end
+
+-- A throw under onFrame's pcall: in pass 1 the complete entries still run, then the log; in pass 2 the rest drops.
+local function onFault(b: Batch, err: any)
+	table.clear(argv)
+	unclaim()
+	if b.decoding then
+		b.decoding = false
+		debug.resetmemorycategory()
+		local n = fillN
+		if n > 0 then
+			b.n = n
+			b.pos = 1
+			local ok, going = pcall(deliverTape, b)
+			clearTape(b, n)
+			if not ok then
+				err = going -- a fault at an earlier message: the one-pass decoder never got further
+			elseif not going then
+				return
+			end
+		end
+		if generation ~= b.gen then
+			return
+		end
+	else
+		clearTape(b, b.n)
+	end
+	Log.once("cn:decode", "a server frame failed to decode: " .. tostring(err))
+end
+
+local function newBatch(): Batch
+	return {
+		owner = 0,
+		busy = false,
+		pos = 1,
+		node = nil,
+		stop = 0,
+		gen = 0,
+		n = 0,
+		high = 0,
+		tape = table.create(TAPE_CAP0),
+		now = 0,
+		refs = nil,
+		p = 0,
+		cursor = 0,
+		decoding = false,
+		why = nil,
+		route = nil,
+		num = nil,
+	}
 end
 
 -- OnClientEvent (both remotes). `refs` only ever comes on the reliable remote.
@@ -1058,13 +1592,25 @@ local function onFrame(unreliable: boolean, frame: any, refs: any)
 	end
 	framesIn += 1
 	bytesIn += len
-	debug.setmemorycategory(CAT)
-	local ok, err = pcall(decodeFrame :: any, frame, refs)
-	debug.resetmemorycategory()
+	local b = spare or newBatch()
+	spare = nil
+	b.gen = generation
+	b.now = clock()
+	b.refs = refs
+	b.p = 0
+	b.cursor = 0
+	local ok, err = pcall(receive :: any, b, frame)
 	if not ok then
-		table.clear(argv)
-		Log.once("cn:decode", "a server frame failed to decode: " .. tostring(err))
+		onFault(b, err)
 	end
+	if refs ~= nil then
+		ctx.refs = nil -- the decoder lets go of the frame's Instances too (a client frame never sets ctx.nrefs)
+	end
+	b.refs = nil -- nothing of this frame stays referenced (a parked listener's runner may still hold `b`)
+	b.why = nil
+	b.route = nil
+	b.node = nil
+	spare = b
 end
 
 local function onReliable(frame: any, refs: any)
@@ -1474,6 +2020,12 @@ function ClientNet._reset(): ()
 	Codec.resetWriter(w)
 	Codec.beginFrame(ctx, nil, 0)
 	table.clear(argv)
+	spare = nil -- a frame being received keeps its own batch, and parks it here when it ends
+	fillN = 0
+	table.clear(claimed)
+	table.clear(claimedList)
+	claimedN = 0
+	lastClear = 0
 	nfailed = 0
 	abortLogged = false
 	framesIn, bytesIn, messagesIn = 0, 0, 0
@@ -1550,6 +2102,16 @@ ClientNet._test = table.freeze({
 	end,
 	routeBucket = function(id: number): BucketT
 		return routeBucket[id]
+	end,
+	-- True when nothing of the last frame is held: no tape values or refs in the spare batch, no refs in the decoder.
+	tapeEmpty = function(): boolean
+		local b = spare
+		return ctx.refs == nil and (b == nil or (b.n == 0 and b.refs == nil and b.node == nil and next(b.tape) == nil))
+	end,
+	-- `high`: most tape slots used since the tape was made; `lastClear`: slots the last frame's clear touched.
+	tapeStats = function(): { high: number, lastClear: number }
+		local b = spare
+		return { high = if b then b.high else 0, lastClear = lastClear }
 	end,
 })
 

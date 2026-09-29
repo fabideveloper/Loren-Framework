@@ -32,6 +32,12 @@ type Prog = {
 	sub: { any },
 	sub2: { any }, -- MAP value Prog, ENUM name -> index, ENUMITEM Value -> EnumItem, INSTANCE root (or false)
 	anf: boolean, -- AllowNonFinite
+	fixed: number, -- > 0: every field is fixed-size and required, so the prog is one run of this many bytes
+	offs: { number }, -- fixed progs: the byte offset of each field in that run
+	keys: { any }, -- where field i goes in dst: its name (structs) or i
+	rng: { boolean }, -- integers: the bounds are narrower than the type's, so a hostile decode checks them
+	tpl: any, -- structs, trusted decode: the frozen template a new struct clones (B1), EMPTY or false (see buildProg)
+	htpl: any, -- the same for a hostile decode
 }
 
 local OP_BOOL = 1
@@ -74,6 +80,7 @@ local D_MISSING_INSTANCE = 43
 
 local REF_USED = 2 -- ReadCtx.refFlags bit1 (hostile): the sidecar slot was already referenced this frame
 local NESTED_PREALLOC = 64 -- hostile typed arrays of non-scalar elements: slots preallocated at most
+local EMPTY = table.freeze({}) -- a template of no fields: its clone is a new table exactly like {}
 
 local E_NEEDS_REF = 4
 local E_BAD_TYPE = 5
@@ -87,6 +94,9 @@ local E_TOO_MANY_VALUES = 12
 
 local F32_MAX = 3.4028234663852886e38
 local F64_MAX = 1.7976931348623157e308
+local F32_ABS = 0x7FFFFFFF -- f32 bits without the sign: 0 is zero, below F32_NORMAL subnormal, above F32_INF NaN
+local F32_NORMAL = 0x00800000
+local F32_INF = 0x7F800000
 local U32_MAX = 4294967295
 local INF = math.huge
 local MAX_DESC_DEPTH = 16
@@ -1111,6 +1121,9 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 	local efast: { number } = table.create(n, 0)
 	local sub: { any } = table.create(n, false) :: any
 	local sub2: { any } = table.create(n, false) :: any
+	local offs: { number } = table.create(n, 0)
+	local keys: { any } = table.create(n, false) :: any
+	local rng: { boolean } = table.create(n, false)
 	for i = 1, n do
 		local d = descs[i]
 		if d.op == OP_OPTIONAL then
@@ -1124,6 +1137,10 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 		hi[i] = d.hi
 		max[i] = d.max
 		flags[i] = d.flags
+		keys[i] = if names then names[i] else i
+		if op >= OP_U8 and op <= OP_I32 then
+			rng[i] = d.lo ~= INT_LO[op] or d.hi ~= INT_HI[op]
+		end
 		if op == OP_STRING or op == OP_BUFFER then
 			pw[i] = prefixWidth(d.max)
 		elseif op == OP_ARRAY then
@@ -1197,7 +1214,38 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 			i += 1
 		end
 	end
-	for _, list in { ops, opt, run, fsz, lo, hi, max, pw, flags, emin, smin, efast, sub, sub2 } :: { any } do
+	-- One run over every field (none optional): the fast decoders read field i at offs[i] after one bounds check.
+	local fixed = 0
+	for f = 1, n do
+		if fsz[f] == 0 or opt[f] then
+			fixed = 0
+			break
+		end
+		offs[f] = fixed
+		fixed += fsz[f]
+	end
+	-- B1: the clone keeps frozen v2's pairs order only if every field gets a value; else {} (EMPTY for fixedRun)
+	local tpl: any, htpl: any = false, false
+	if names then
+		local shape: { [string]: boolean } = {}
+		local trusted, hostile = true, true
+		for f = 1, n do
+			local op = ops[f]
+			if opt[f] or op == OP_ANY or (op == OP_INSTANCE and flags[f] == NILABLE) then
+				trusted, hostile = false, false
+			elseif op == OP_ENUM or op == OP_ENUMITEM or op == OP_INSTANCE then
+				trusted = false -- nil when unknown or missing; a hostile decode refuses those
+			end
+			shape[names[f]] = false
+		end
+		table.freeze(shape)
+		local empty = if fixed > 0 then EMPTY else false
+		tpl = if trusted then shape else empty
+		htpl = if hostile then shape else empty
+	end
+	for _, list in
+		{ ops, opt, run, fsz, lo, hi, max, pw, flags, emin, smin, efast, sub, sub2, offs, keys, rng } :: { any }
+	do
 		table.freeze(list :: any)
 	end
 	local prog: Prog = {
@@ -1219,6 +1267,12 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 		sub = sub,
 		sub2 = sub2,
 		anf = anf,
+		fixed = fixed,
+		offs = offs,
+		keys = keys,
+		rng = rng,
+		tpl = tpl,
+		htpl = htpl,
 	}
 	table.freeze(prog :: any)
 	return prog
@@ -1664,6 +1718,183 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 	return 0
 end
 
+-- Fixed progs from o (bytes checked by the caller): the first element it doubts (decodeFields decides), or cnt + 1.
+@native
+local function fixedRun(
+	b: buffer,
+	o: number,
+	hostile: boolean,
+	p: Prog,
+	dst: any,
+	tpl: any,
+	k: number,
+	cnt: number
+): number
+	local keys, ops, offs, n, size = p.keys, p.ops, p.offs, p.count, p.fixed
+	local lo: any, hi: any, rng: any, anf = nil, nil, nil, false
+	if hostile then
+		lo, hi, rng, anf = p.lo, p.hi, p.rng, p.anf -- read once per call; the trusted side never needs them
+	end
+	local base = o + (k - 1) * size
+	for e = k, cnt do
+		local t = if tpl then table.clone(tpl) else dst -- tpl: element e of an array; false: one run into dst
+		for i = 1, n do
+			local op = ops[i]
+			local at = base + offs[i]
+			local v: any
+			if op == OP_BOOL then
+				local x = buffer.readu8(b, at)
+				if x == 1 then
+					v = true
+				elseif x == 0 then
+					v = false
+				else
+					return e
+				end
+			elseif op == OP_VECTOR3 then
+				local mx = bit32.band(buffer.readu32(b, at), F32_ABS)
+				local my = bit32.band(buffer.readu32(b, at + 4), F32_ABS)
+				local mz = bit32.band(buffer.readu32(b, at + 8), F32_ABS)
+				-- subnormal or NaN: decodeFields builds it, as frozen v2 does, whatever the native code does with f32s
+				if
+					not (
+						(mx == 0 or (mx >= F32_NORMAL and mx <= F32_INF))
+						and (my == 0 or (my >= F32_NORMAL and my <= F32_INF))
+						and (mz == 0 or (mz >= F32_NORMAL and mz <= F32_INF))
+					)
+				then
+					return e
+				end
+				local x, y, z = buffer.readf32(b, at), buffer.readf32(b, at + 4), buffer.readf32(b, at + 8)
+				if
+					hostile
+					and not anf
+					and not (
+						x >= -F64_MAX
+						and x <= F64_MAX
+						and y >= -F64_MAX
+						and y <= F64_MAX
+						and z >= -F64_MAX
+						and z <= F64_MAX
+					)
+				then
+					return e
+				end
+				v = Vector3.new(x, y, z)
+				if hostile and hi[i] <= F64_MAX and not (v.Magnitude <= hi[i]) then
+					return e
+				end
+			elseif op <= OP_I32 then
+				if op == OP_U8 then
+					v = buffer.readu8(b, at)
+				elseif op == OP_U16 then
+					v = buffer.readu16(b, at)
+				elseif op == OP_I8 then
+					v = buffer.readi8(b, at)
+				elseif op == OP_I16 then
+					v = buffer.readi16(b, at)
+				elseif op == OP_U32 then
+					v = buffer.readu32(b, at)
+				else
+					v = buffer.readi32(b, at)
+				end
+				if hostile and rng[i] and not (v >= lo[i] and v <= hi[i]) then
+					return e
+				end
+			elseif op <= OP_F64 then
+				v = if op == OP_F32 then buffer.readf32(b, at) else buffer.readf64(b, at)
+				-- out of range: a finite value fails, a non-finite one only without AllowNonFinite (as decodeFields)
+				if hostile and not (v >= lo[i] and v <= hi[i]) and (not anf or (v >= -F64_MAX and v <= F64_MAX)) then
+					return e
+				end
+			elseif op == OP_VECTOR2 then
+				local x, y = buffer.readf32(b, at), buffer.readf32(b, at + 4)
+				if hostile and not anf and not (x >= -F64_MAX and x <= F64_MAX and y >= -F64_MAX and y <= F64_MAX) then
+					return e
+				end
+				v = Vector2.new(x, y)
+				if hostile and hi[i] <= F64_MAX and not (v.Magnitude <= hi[i]) then
+					return e
+				end
+			elseif op == OP_COLOR3 then
+				local cr, cg, cb = buffer.readf32(b, at), buffer.readf32(b, at + 4), buffer.readf32(b, at + 8)
+				if
+					hostile
+					and not anf
+					and not (
+						cr >= -F64_MAX
+						and cr <= F64_MAX
+						and cg >= -F64_MAX
+						and cg <= F64_MAX
+						and cb >= -F64_MAX
+						and cb <= F64_MAX
+					)
+				then
+					return e
+				end
+				v = Color3.new(cr, cg, cb)
+			elseif op == OP_CFRAME then
+				local x, y, z = buffer.readf32(b, at), buffer.readf32(b, at + 4), buffer.readf32(b, at + 8)
+				local r00, r01, r02 = buffer.readf32(b, at + 12), buffer.readf32(b, at + 16), buffer.readf32(b, at + 20)
+				local r10, r11, r12 = buffer.readf32(b, at + 24), buffer.readf32(b, at + 28), buffer.readf32(b, at + 32)
+				local r20, r21, r22 = buffer.readf32(b, at + 36), buffer.readf32(b, at + 40), buffer.readf32(b, at + 44)
+				if
+					hostile
+					and not anf
+					and not (
+						x >= -F64_MAX
+						and x <= F64_MAX
+						and y >= -F64_MAX
+						and y <= F64_MAX
+						and z >= -F64_MAX
+						and z <= F64_MAX
+						and r00 >= -F64_MAX
+						and r00 <= F64_MAX
+						and r01 >= -F64_MAX
+						and r01 <= F64_MAX
+						and r02 >= -F64_MAX
+						and r02 <= F64_MAX
+						and r10 >= -F64_MAX
+						and r10 <= F64_MAX
+						and r11 >= -F64_MAX
+						and r11 <= F64_MAX
+						and r12 >= -F64_MAX
+						and r12 <= F64_MAX
+						and r20 >= -F64_MAX
+						and r20 <= F64_MAX
+						and r21 >= -F64_MAX
+						and r21 <= F64_MAX
+						and r22 >= -F64_MAX
+						and r22 <= F64_MAX
+					)
+				then
+					return e
+				end
+				v = CFrame.new(x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)
+			elseif op == OP_ENUM then
+				local x = buffer.readu8(b, at)
+				if hostile and x >= p.max[i] then
+					return e
+				end
+				v = p.sub[i][x + 1]
+			else -- OP_ENUMITEM (a fixed prog holds no other op)
+				v = p.sub2[i][buffer.readu16(b, at)]
+				if v == nil and hostile then
+					return e
+				end
+			end
+			t[keys[i]] = v
+		end
+		if tpl then
+			dst[e] = t
+		end
+		base += size
+	end
+	return cnt + 1
+end
+
+local one: { any } = {} -- decodeFields' OP_STRUCT: where fixedRun puts the struct (read right after the call)
+
 @native
 local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: Prog, dst: any): (number, any)
 	local names = p.names
@@ -1732,7 +1963,7 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 					v = buffer.readi32(b, o)
 					o += 4
 				end
-				if hostile and not (v >= p.lo[i] and v <= p.hi[i]) then
+				if hostile and p.rng[i] and not (v >= p.lo[i] and v <= p.hi[i]) then
 					return decodeFail(ctx, D_RANGE, p, i, o)
 				end
 			else
@@ -1982,6 +2213,7 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 						end
 					elseif eop <= OP_I32 then
 						local elo, ehi = ep.lo[1], ep.hi[1]
+						local check = hostile and ep.rng[1] -- a value read at its type's width is always inside its bounds
 						for k = 1, cnt do
 							local x = 0
 							if eop == OP_U8 then
@@ -2003,7 +2235,7 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 								x = buffer.readi32(b, o)
 								o += 4
 							end
-							if hostile and not (x >= elo and x <= ehi) then
+							if check and not (x >= elo and x <= ehi) then
 								return decodeFail(ctx, D_RANGE, p, i, o)
 							end
 							t[k] = x
@@ -2027,6 +2259,34 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 								end
 							end
 							t[k] = x
+						end
+					end
+				elseif ep.ops[1] == OP_STRUCT and not ep.opt[1] then
+					-- one required struct per element: into a clone of its template, no element prog (O2)
+					local sp: Prog = ep.sub[1]
+					local tpl = if hostile then sp.htpl else sp.tpl
+					local f = sp.fixed
+					if f > 0 and cnt * f <= lim - o then
+						-- every element is in the buffer: one call per run of elements; decodeFields takes one it doubts
+						local k = fixedRun(b, o, hostile, sp, t, tpl, 1, cnt)
+						while k <= cnt do
+							local e = table.clone(tpl)
+							local q = decodeFields(b, o + (k - 1) * f, lim, ctx, sp, e)
+							if ctx.err ~= 0 then
+								return decodePass(ctx, p, i, q)
+							end
+							t[k] = e
+							k = fixedRun(b, o, hostile, sp, t, tpl, k + 1, cnt)
+						end
+						o += cnt * f
+					else
+						for k = 1, cnt do
+							local e = if tpl then table.clone(tpl) else {}
+							o = decodeFields(b, o, lim, ctx, sp, e)
+							if ctx.err ~= 0 then
+								return decodePass(ctx, p, i, o)
+							end
+							t[k] = e
 						end
 					end
 				else
@@ -2065,12 +2325,21 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 				v = m
 			end
 		elseif op == OP_STRUCT then
-			local t = {}
-			o = decodeFields(b, o, lim, ctx, p.sub[i], t)
-			if ctx.err ~= 0 then
-				return decodePass(ctx, p, i, o)
+			local sp: Prog = p.sub[i]
+			local tpl = if hostile then sp.htpl else sp.tpl
+			local f = sp.fixed
+			-- fixedRun fills a clone of its own (one[1]); a struct it doubts is decoded into a new one, as frozen v2 does
+			if f > 0 and o + f <= lim and fixedRun(b, o, hostile, sp, one, tpl, 1, 1) > 1 then
+				v = one[1]
+				o += f
+			else
+				local t = if tpl then table.clone(tpl) else {}
+				o = decodeFields(b, o, lim, ctx, sp, t)
+				if ctx.err ~= 0 then
+					return decodePass(ctx, p, i, o)
+				end
+				v = t
 			end
-			v = t
 		else -- OP_OPTIONAL (a second OPTIONAL level)
 			o, v = decodeFields(b, o, lim, ctx, p.sub[i], nil)
 			if ctx.err ~= 0 then
@@ -2088,6 +2357,73 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 	return o, v
 end
 
+type Decode = (b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }) -> (number, number)
+
+-- The route's decoder: the interpreter, or a fast path for its shape that hands anything it doubts to the interpreter.
+local function typedDecode(prog: Prog, count: number): Decode
+	local function interpret(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
+		missing = false
+		local q = decodeFields(b, o, lim, ctx, prog, argv)
+		if missing then
+			missing = false
+			if ctx.err == 0 then
+				ctx.err = D_MISSING_INSTANCE
+			end
+		end
+		return count, q
+	end
+	local size = prog.fixed
+	if size > 0 then
+		-- every argument fixed-size and required (one scalar too): one bounds check, straight into argv (O1)
+		@native
+		local function fixedArgs(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
+			if o + size <= lim and fixedRun(b, o, ctx.hostile, prog, argv, false, 1, 1) > 1 then
+				return count, o + size
+			end
+			return interpret(b, o, lim, ctx, argv)
+		end
+		return fixedArgs
+	end
+	if count ~= 1 or prog.ops[1] ~= OP_STRUCT or prog.opt[1] then
+		return interpret
+	end
+	-- one required struct: its fields decode straight into a clone of the template, no root prog (O2)
+	local sp: Prog = prog.sub[1]
+	local tpl, htpl = sp.tpl, sp.htpl
+	local function struct(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
+		missing = false
+		local x = if ctx.hostile then htpl else tpl
+		local t = if x then table.clone(x) else {}
+		local q = decodeFields(b, o, lim, ctx, sp, t)
+		if ctx.err == 0 then
+			argv[1] = t
+		else
+			ctx.errArg = 1 -- decodePass at the root
+		end
+		if missing then
+			missing = false
+			if ctx.err == 0 then
+				ctx.err = D_MISSING_INSTANCE
+			end
+		end
+		return 1, q
+	end
+	local ssize = sp.fixed
+	if ssize == 0 then
+		return struct
+	end
+	@native
+	local function fixedStruct(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
+		-- as an array of one: argv[1] gets its clone only when every field is decoded
+		local hostile = ctx.hostile
+		if o + ssize <= lim and fixedRun(b, o, hostile, sp, argv, if hostile then htpl else tpl, 1, 1) > 1 then
+			return 1, o + ssize
+		end
+		return struct(b, o, lim, ctx, argv)
+	end
+	return fixedStruct
+end
+
 local function typedCodec(prog: Prog, count: number, refs: boolean, anf: boolean): PayloadCodec
 	local codec: PayloadCodec = {
 		typed = true,
@@ -2102,17 +2438,7 @@ local function typedCodec(prog: Prog, count: number, refs: boolean, anf: boolean
 			end
 			return encodeFields(w, prog, nil, ...)
 		end,
-		decode = function(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
-			missing = false
-			local q = decodeFields(b, o, lim, ctx, prog, argv)
-			if missing then
-				missing = false
-				if ctx.err == 0 then
-					ctx.err = D_MISSING_INSTANCE
-				end
-			end
-			return count, q
-		end,
+		decode = typedDecode(prog, count),
 	}
 	table.freeze(codec :: any)
 	return codec
@@ -2418,6 +2744,15 @@ function Schema.compile(
 	return typedCodec(buildProg(list, false, true, anf), #list, refs and not unreliable, anf)
 end
 
+-- Args that are exactly one required bool, integer, float or Vector3: that op (ClientNet reads it inline), else 0.
+function Schema.scalarOp(descs: { Descriptor }?): number
+	if descs == nil or #descs ~= 1 or not isDescriptor(descs[1]) then
+		return 0
+	end
+	local op = descs[1].op
+	return if op <= OP_F64 or op == OP_VECTOR3 then op else 0
+end
+
 Schema.writeDescriptor = writeDescriptor
 Schema.readDescriptor = readDescriptor
 
@@ -2427,6 +2762,12 @@ Schema._test = table.freeze({
 	f32Down = f32Down,
 	f32Up = f32Up,
 	describe = describe,
+	-- The root prog Schema.compile builds for typed Args (fixed, offs, keys, rng and each struct's tpl and htpl)
+	prog = function(descs: { Descriptor }, allowNonFinite: boolean?): any
+		return buildProg(descs, false, true, allowNonFinite == true)
+	end,
+	fixedRun = fixedRun,
+	EMPTY = EMPTY,
 })
 
 return table.freeze(Schema)

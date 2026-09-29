@@ -71,6 +71,7 @@ local forwardErrors = false
 
 local globalMw: { (...any) -> ...any } = {}
 local globalMwN = 0
+local mwState = { n = 0 } -- globalMwN for Transport's inline middleware probe (the same table for the module's lifetime)
 local errorHandlers: { ErrorHandler } = {}
 local nextToken = 0 -- never reset: a thread from before a reset can never match a new call
 local lastFinished = 0
@@ -102,6 +103,9 @@ Dispatch.RUN = RUN
 Dispatch.QUEUE = QUEUE
 Dispatch.SERIAL = SERIAL
 Dispatch.BUSY = BUSY
+
+-- mwState.n > 0: every ClientEvent goes through Dispatch.event (Transport reads it per message, never caches it).
+Dispatch.mwState = mwState
 
 -- Helpers ------------------------------------------------------------------------------------------
 
@@ -874,14 +878,22 @@ function Dispatch.accept(
 	end
 end
 
--- An accepted ClientEvent (after decode). argv as for accept.
-function Dispatch.event(ps: PlayerState, route: Route, argv: { any }, n: number): ()
-	local mw, colon = memberMiddleware(route, false)
-	if globalMwN == 0 and mw == nil then
-		deliver(route.event :: any, ps.player, table.unpack(argv, 1, n))
-	else
-		spawn(runEvent, ps, route, mw, colon, n, table.unpack(argv, 1, n))
+-- An accepted ClientEvent (argv as for accept). True: middleware took it; false: the caller runs the listeners.
+function Dispatch.event(ps: PlayerState, route: Route, argv: { any }, n: number): boolean
+	local mw: any, colon: boolean = nil, false
+	local module: any = route.module
+	if type(module) == "table" then
+		-- memberMiddleware is nil unless a Middleware table names this member (or a metatable may supply one).
+		local t: any = rawget(module, "Middleware")
+		if (t == nil and getmetatable(module) ~= nil) or (type(t) == "table" and rawget(t, route.member) ~= nil) then
+			mw, colon = memberMiddleware(route, false)
+		end
 	end
+	if globalMwN == 0 and mw == nil then
+		return false
+	end
+	spawn(runEvent, ps, route, mw, colon, n, table.unpack(argv, 1, n))
+	return true
 end
 
 -- The watchdog (flush thread, every frame; runs every WATCHDOG_INTERVAL).
@@ -965,6 +977,7 @@ function Dispatch.addMiddleware(fn: (player: Player, info: any, ...any) -> ...an
 	end
 	globalMwN += 1
 	globalMw[globalMwN] = fn
+	mwState.n = globalMwN
 end
 
 -- Loren.OnError (server, any time): fn({ Service, Member, Player, Incident, Message, Traceback }).
@@ -988,6 +1001,7 @@ end
 function Dispatch._reset(): ()
 	table.clear(globalMw)
 	globalMwN = 0
+	mwState.n = 0
 	table.clear(errorHandlers)
 	lastFinished = 0
 	curThread = nil

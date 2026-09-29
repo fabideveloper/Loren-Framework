@@ -1,9 +1,5 @@
 --!strict
 
--- Records OrderService's pre-HELLO fires (specs/v2/client/Order.spec.luau). The server fired them
--- before this client's HELLO; the reliable one waits in the outbox, arrives after MANIFEST and is
--- replayed from the backlog on this Connect. The unreliable one must never arrive.
-
 local Probe = {
 	early = {} :: { { kind: any, uid: any } },
 	uearly = 0,

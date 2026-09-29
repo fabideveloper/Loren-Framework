@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- TestConfig attributes for the bench place, read the same way on the server and the clients.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = {}
@@ -16,16 +15,12 @@ export type Settings = {
 	libs: { string },
 	runtimes: { string },
 	payloads: { string },
-	-- Library = "loren": the step-checkpoint quick mode (only the two Loren rows run).
 	quick: boolean,
 	problem: string?,
 }
 
--- Result rows run in this order; "loren-untyped" shares the Loren runtime.
 Config.LIBS = { "loren", "loren-untyped", "blinkblox", "blink", "bytenet", "bridgenet2" }
 
--- Runtimes set up in this order: BridgeNet2 first (it must see every PlayerAdded), Loren last (it yields).
--- Every Library setting loads all of them, so a partial run shares the full run's process state.
 Config.RUNTIMES = { "bridgenet2", "bytenet", "blink", "blinkblox", "loren" }
 
 Config.RUNTIME_OF = {

@@ -1,5 +1,4 @@
 --!strict
--- R1.5 decode fast paths (O1 scalars, O2 structs, B1 templates) against the frozen v2 interpreter, input for input.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -36,56 +35,55 @@ local OLD: Side = {
 local D_MISSING = NOW.C.Decode.MISSING_INSTANCE
 local MAX_C2S = NOW.C.Limit.MAX_ARGS_C2S
 local MAX_S2C = NOW.C.Limit.MAX_ARGS_S2C
-local ROUNDS = 150 -- random values per case, direction and AllowNonFinite setting
-local MUTATIONS = 6 -- corruptions of each valid encoding
+local ROUNDS = 150
+local MUTATIONS = 6
 local RANDOM_BUFFERS = 40
-local SLIDE_BASE_MAX = 400 -- the slid encoding is the first valid one at most this long
-local SLIDE_ALL = 32 -- offsets below this get every pattern; later ones are sampled
-local SLIDE_SAMPLE = 16 -- one later offset in this many
+local SLIDE_BASE_MAX = 400
+local SLIDE_ALL = 32
+local SLIDE_SAMPLE = 16
 local CLIENT_FRAMES = 300
-local YIELD_AFTER = 0.05 -- seconds of work between yields (Studio stops a script that never yields)
+local YIELD_AFTER = 0.05
 local MISMATCHES_SHOWN = 4
 local NAN, INF = 0 / 0, math.huge
 local NEG0 = -1 / INF
 local F32_MAX = 3.4028234663852886e38
 local F64_MAX = 1.7976931348623157e308
 
--- Patterns written at every offset of a valid encoding (counts, tags, lengths and IEEE edge cases)
 local U8S = { 0, 1, 2, 3, 0x7F, 0x80, 0xFE, 0xFF, 100, 101 }
 local U16S = { 0, 1, 2, 0x7FFF, 0x8000, 0xFFFF, 999, 1000, 1001 }
 local U32S = { 0, 1, 2, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 69999, 70000, 70001 }
 local F32S = {
-	0x00000000, -- 0
-	0x80000000, -- -0
-	0x7FC00000, -- NaN
-	0xFFC00000, -- -NaN
-	0x7F800001, -- signalling NaN
-	0x7F800000, -- inf
-	0xFF800000, -- -inf
-	0x00000001, -- the smallest subnormal
-	0x807FFFFF, -- the largest negative subnormal
-	0x00800000, -- the smallest normal
-	0x7F7FFFFF, -- max
-	0xFF7FFFFF, -- -max
-	0x3F800000, -- 1
-	0xBF800000, -- -1
-	0x41200000, -- 10
-	0x41300000, -- 11
+	0x00000000,
+	0x80000000,
+	0x7FC00000,
+	0xFFC00000,
+	0x7F800001,
+	0x7F800000,
+	0xFF800000,
+	0x00000001,
+	0x807FFFFF,
+	0x00800000,
+	0x7F7FFFFF,
+	0xFF7FFFFF,
+	0x3F800000,
+	0xBF800000,
+	0x41200000,
+	0x41300000,
 }
-local F64S: { { number } } = { -- { low word, high word }
+local F64S: { { number } } = {
 	{ 0, 0 },
-	{ 0, 0x80000000 }, -- -0
-	{ 0, 0x7FF80000 }, -- NaN
-	{ 1, 0x7FF00000 }, -- signalling NaN
-	{ 0, 0x7FF00000 }, -- inf
-	{ 0, 0xFFF00000 }, -- -inf
-	{ 1, 0 }, -- the smallest subnormal
-	{ 0xFFFFFFFF, 0x000FFFFF }, -- the largest subnormal
-	{ 0xFFFFFFFF, 0x7FEFFFFF }, -- max
-	{ 0xFFFFFFFF, 0xFFEFFFFF }, -- -max
-	{ 0, 0x3FF00000 }, -- 1
-	{ 0, 0x40590000 }, -- 100
-	{ 1, 0x40590000 }, -- just above 100
+	{ 0, 0x80000000 },
+	{ 0, 0x7FF80000 },
+	{ 1, 0x7FF00000 },
+	{ 0, 0x7FF00000 },
+	{ 0, 0xFFF00000 },
+	{ 1, 0 },
+	{ 0xFFFFFFFF, 0x000FFFFF },
+	{ 0xFFFFFFFF, 0x7FEFFFFF },
+	{ 0xFFFFFFFF, 0xFFEFFFFF },
+	{ 0, 0x3FF00000 },
+	{ 0, 0x40590000 },
+	{ 1, 0x40590000 },
 }
 
 local folderA = Instance.new("Folder")
@@ -99,7 +97,6 @@ local FUZZ_REFS: { any } = { folderA, part, { 1, 2 } }
 
 local function noop(...: any) end
 
--- A canonical text for any value: maps sorted, NaN and -0 explicit, Instances by id, frozen tables and metatables marked
 local function show(x: any, depth: number?): string
 	local d = depth or 0
 	if d > 64 then
@@ -149,8 +146,6 @@ local function hex(b: buffer, len: number): string
 		return string.format("%02x", string.byte(c))
 	end)) .. (if len > 48 then ".." else "")
 end
-
--- Shapes: one side-independent description, built into descriptors by each side's own T ---------------
 
 local function S(k: string, extra: { [string]: any }?): Shape
 	local s: Shape = { k = k }
@@ -287,8 +282,6 @@ local function compile(side: Side, shapes: { Shape }, anf: boolean, c2s: boolean
 	return side.Schema.compile(buildList(side.Schema.T, shapes), anf, if c2s then MAX_C2S else MAX_S2C, false)
 end
 
--- Random values (mostly valid for the shape; a few are not, and those must fail encode the same way) --------
-
 local F32_EDGES = { 0, NEG0, 1, -1, 0.5, 0.1, 1e-45, 1.1754942e-38, F32_MAX, -F32_MAX, 16777217, 1e10 }
 local F64_EDGES = { 0, NEG0, 5e-324, 2.2250738585072014e-308, F64_MAX, -F64_MAX, 1 / 3, 1e300, -1e-300 }
 local NONFINITE = { NAN, INF, -INF }
@@ -308,7 +301,7 @@ local function genInt(rng: Random, lo: number, hi: number): number
 	elseif roll < 0.3 then
 		return hi
 	elseif roll < 0.33 then
-		return hi + 1 -- out of range: encode RANGE
+		return hi + 1
 	end
 	return rng:NextInteger(lo, hi)
 end
@@ -355,9 +348,9 @@ local function genVector(rng: Random, mag: number?, two: boolean): any
 	if mag then
 		local roll = rng:NextNumber()
 		if roll < 0.1 then
-			return if two then Vector2.new(mag, 0) else Vector3.new(0, mag, 0) -- on the edge (f32 rounding decides)
+			return if two then Vector2.new(mag, 0) else Vector3.new(0, mag, 0)
 		elseif roll < 0.13 then
-			return if two then Vector2.new(0, mag * 1.01) else Vector3.new(mag * 1.01, 0, 0) -- above: encode RANGE
+			return if two then Vector2.new(0, mag * 1.01) else Vector3.new(mag * 1.01, 0, 0)
 		end
 		local c = mag / 1.8
 		local function r(): number
@@ -446,7 +439,7 @@ local function gen(rng: Random, s: Shape): any
 		end
 		return t
 	elseif k == "any" then
-		return if rng:NextNumber() < 0.15 then nil else pick(rng, ANY_VALUES) -- nil: a required struct key goes away
+		return if rng:NextNumber() < 0.15 then nil else pick(rng, ANY_VALUES)
 	end
 	error("DecodeFast.spec: unknown shape " .. tostring(k))
 end
@@ -459,8 +452,6 @@ local function genArgs(rng: Random, shapes: { Shape }): Args
 	end
 	return values
 end
-
--- Encode and decode on one side ------------------------------------------------------------------
 
 local function encodeText(side: Side, pc: any, c2s: boolean, values: Args): Encoded
 	local w = side.Codec.newWriter(16, c2s)
@@ -490,7 +481,6 @@ local function encodeText(side: Side, pc: any, c2s: boolean, values: Args): Enco
 	return { text = text, bytes = bytes, refs = refs, nrefs = w.nrefs }
 end
 
--- One decode as text: status, errArg, count, cursor, ref cursor and flags, counters, and argv (also after a failure)
 local function decodeText(side: Side, pc: any, c2s: boolean, input: Input): string
 	local Codec = side.Codec
 	local refs, nrefs = input.refs, input.nrefs
@@ -515,7 +505,7 @@ local function decodeText(side: Side, pc: any, c2s: boolean, input: Input): stri
 	local argv: { any } = {}
 	local ok, n, q = pcall(pc.decode, input.b, 0, input.lim, ctx, argv)
 	if not ok then
-		return "decode threw" .. walk -- the texts name each side's module: only the fact is compared
+		return "decode threw" .. walk
 	end
 	local text = string.format(
 		"err=%d errArg=%d n=%s q=%s cursor=%d nodes=%d claimed=%d%s",
@@ -583,7 +573,6 @@ local function variant(valid: Input, b: buffer, lim: number): Input
 	return { b = b, lim = lim, refs = valid.refs, nrefs = valid.nrefs }
 end
 
--- One corruption of a valid encoding: trailing bytes, a cut, a byte, an f32 or f64 pattern, or a lying length
 local function mutate(rng: Random, valid: Input): (Input, string)
 	local len = valid.lim
 	local kind = rng:NextInteger(1, 6)
@@ -629,7 +618,6 @@ local function mutate(rng: Random, valid: Input): (Input, string)
 	return variant(valid, b, len), string.format("byte %d = %d", at, x)
 end
 
--- Every truncation and every pattern at every offset of one valid encoding (sampled past SLIDE_ALL)
 local function slide(ck: Checker, pcs: { any }, c2s: boolean, rng: Random, valid: Input, where: string)
 	local len = valid.lim
 	for cut = 0, len - 1 do
@@ -682,7 +670,6 @@ end
 
 type RefVariant = { name: string, refs: { any }, nrefs: number }
 
--- The sidecar as it may arrive: S->C with Instances hidden or missing slots; C->S with bad slots
 local function refVariants(c2s: boolean, refs: { any }, nrefs: number): { RefVariant }
 	local out: { RefVariant } = {}
 	if c2s then
@@ -774,8 +761,6 @@ local function runCase(case: Case, index: number): Checker
 	end
 	return ck
 end
-
--- Cases ---------------------------------------------------------------------------------------------
 
 local ENTITY = STRUCT({
 	id = U16,
@@ -904,8 +889,6 @@ for _, c in MORE do
 	table.insert(CASES, c)
 end
 
--- ClientNet (O1: one required scalar read inline by decodeFrame) ---------------------------------------
-
 local SVC = "DecodeFast"
 type Route = { name: string, args: { Shape }?, wire: { Shape }?, ordered: boolean? }
 local ROUTES: { Route } = {
@@ -987,7 +970,6 @@ end
 
 type Outcome = { lines: { string }, reason: string?, messagesIn: number, dropped: number }
 
--- The frozen v2 decoder walking the frame as ClientNet does: values in order, stale Ordered and nil Instances skipped
 local function oracle(decoders: { any }, frame: buffer, refs: { any }?): Outcome
 	local Codec = OLD.Codec
 	local ctx = Codec.newReadCtx(false, false)
@@ -1041,7 +1023,6 @@ local function oracle(decoders: { any }, frame: buffer, refs: { any }?): Outcome
 	return out
 end
 
--- The same frame through a freshly installed ClientNet: what the listeners got, the abort reason and the stats
 local function throughClient(frame: buffer, refs: { any }?): Outcome
 	ClientNet._reset()
 	Calls._reset()
@@ -1081,7 +1062,6 @@ local function outcomeText(o: Outcome): string
 	)
 end
 
--- A frame of messages: { route id, payload bytes (seq included), payload refs }
 type Msg = { id: number, body: buffer, refs: { any } }
 
 local function frameOf(msgs: { Msg }, cutLast: number?): (buffer, { any }?)
@@ -1139,8 +1119,6 @@ local function message(rng: Random, encoders: { any }, id: number, seqs: { [numb
 	error("DecodeFast.spec: no encodable value for route " .. r.name)
 end
 
--- Test body -----------------------------------------------------------------------------------------
-
 return function(t: any)
 	local describe, it, expect = t.describe, t.it, t.expect
 
@@ -1173,7 +1151,7 @@ return function(t: any)
 
 		it("lays out the bench Entity as one 30-byte run in field-name order", function()
 			local root = prog({ build(T, ENTITY) })
-			expect(root.fixed).toBe(0) -- a struct argument is not itself fixed-size
+			expect(root.fixed).toBe(0)
 			local sp = root.sub[1]
 			expect(sp.fixed).toBe(30)
 			expect(sp.keys).toEqual({ "alive", "crouched", "health", "id", "moving", "orientation", "position" })
@@ -1188,17 +1166,14 @@ return function(t: any)
 			expect(sp.tpl).toEqual({ a = false, c = false })
 			expect(sp.htpl).toBe(sp.tpl)
 			expect(sp.fixed).toBe(0)
-			-- an optional field or T.any can be absent on both sides: decode starts from {} as frozen v2 does
 			for _, s in { T.struct({ a = T.u8, b = T.optional(T.u8) }), T.struct({ a = T.u8, b = T.any }) } do
 				local p = prog({ s }).sub[1]
 				expect(p.tpl).toBe(false)
 				expect(p.htpl).toBe(false)
 			end
-			-- an unknown enum or EnumItem and a missing Instance are nil only on the trusted side
 			local mixed = prog({ T.struct({ a = T.string, b = T.enum({ "X" }), c = T.Instance() }) }).sub[1]
 			expect(mixed.tpl).toBe(false)
 			expect(mixed.htpl).toEqual({ a = false, b = false, c = false })
-			-- a fixed struct gets EMPTY instead of false: fixedRun clones a template for each struct
 			local fixed = prog({ T.struct({ a = T.u8, b = T.EnumItem(Enum.Material) }) }).sub[1]
 			expect(fixed.fixed).toBe(3)
 			expect(fixed.tpl).toBe(EMPTY)
@@ -1312,7 +1287,6 @@ return function(t: any)
 			end
 		end
 
-		-- True when the frozen decoder takes a corrupted body but stops before its end (the rest would be read as heads)
 		local function leavesTail(id: number, body: buffer, refs: { any }): boolean
 			local rctx = OLD.Codec.newReadCtx(false, false)
 			OLD.Codec.beginFrame(rctx, refs, 0)
@@ -1323,7 +1297,6 @@ return function(t: any)
 			return ok and (e == 0 or e == D_MISSING) and q < buffer.len(body)
 		end
 
-		-- One route's message with these values, encoded by the frozen side
 		local function messageOf(name: string, ...: any): Msg
 			local id = 0
 			for i, r in ROUTES do
@@ -1400,7 +1373,6 @@ return function(t: any)
 						end
 					end
 				end
-				-- one frame per edge value, then every value in one frame, then every cut of that frame's last message
 				local all: { Msg } = {}
 				for i, body in bodies do
 					local msg: Msg = { id = id, body = body, refs = {} }
@@ -1442,7 +1414,6 @@ return function(t: any)
 						local at = rng:NextInteger(0, buffer.len(body) - 1)
 						local x = if rng:NextNumber() < 0.6 then pick(rng, U8S) else rng:NextInteger(0, 255)
 						buffer.writeu8(body, at, x)
-						-- a corruption that ends the message early would put stray heads in the frame: kept as it was
 						if not leavesTail(last.id, body, last.refs) then
 							msgs[#msgs] = { id = last.id, body = body, refs = last.refs }
 							what ..= string.format(", last message byte %d = %d", at, x)
@@ -1483,8 +1454,8 @@ return function(t: any)
 			local frames: { { Msg } } = {
 				{ msg(5, 1), msg(4, 0), msg(5, 1), msg(6, 0) },
 				{ msg(65534, 1), msg(65535, 0), msg(0, 1), msg(65535, 1) },
-				{ msg(1, 1), msg(1, 2) }, -- a repeated seq with a bad tag still stops the frame
-				{ msg(9, 0), msg(3, 7) }, -- a stale seq with a bad tag too
+				{ msg(1, 1), msg(1, 2) },
+				{ msg(9, 0), msg(3, 7) },
 				{ msg(9, 0), msg(10, 0x80) },
 			}
 			for i, msgs in frames do
@@ -1529,7 +1500,7 @@ return function(t: any)
 
 	describe("ClientNet replies against the frozen v2 decoder (O23 arities, struct and fixed returns)", function()
 		type Method = { name: string, returns: { Shape }? }
-		local METHODS: { Method } = { -- sorted by name, as the server sends them
+		local METHODS: { Method } = {
 			{ name = "Any" },
 			{ name = "Ent", returns = { ENTITY } },
 			{ name = "Ents", returns = { ARR(ENTITY, 100, 5) } },
@@ -1573,7 +1544,6 @@ return function(t: any)
 			return model
 		end
 
-		-- One Try call of method `id` through a fresh ClientNet, answered by an OK with `values`: (got, want)
 		local function reply(id: number, values: Args): (string, string)
 			ClientNet._reset()
 			Calls._reset()

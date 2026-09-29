@@ -15,7 +15,6 @@ return function(t: any)
 		return Env.service("OrderService").Probe
 	end
 
-	-- The pre-HELLO fires run only when LorenBurn saw Scenario check/all (see OrderService).
 	local loaded, early = pcall(probe)
 	local earlyEvidence = {
 		skip = noPlayers or not loaded or early.earlyArmed ~= true,
@@ -29,7 +28,7 @@ return function(t: any)
 				local record = early[player]
 				expect(record).never.toBeNil()
 				expect(record.error).toBeNil()
-				expect(record.helloed).toBe(false) -- fired before the HELLO: the pre-HELLO path ran
+				expect(record.helloed).toBe(false)
 				expect(record.dropDelta).toBe(1)
 			end
 		end, earlyEvidence)
@@ -60,7 +59,7 @@ return function(t: any)
 			expect(typeof(blob.exact)).toBe("number")
 			expect(blob.exactErrors).toEqual({})
 			expect(blob.sent).toBe(Env.service("OrderService").BlobSends)
-			expect(blob.controlErrors).toEqual({}) -- the 800 B control messages
+			expect(blob.controlErrors).toEqual({})
 			expect(blob.controlSent).toBe(Env.service("OrderService").BlobSends)
 			local limit = C.Limit.UNRELIABLE_SEAL
 			for _, text in { blob.overAllError, blob.overOneError } do

@@ -1,12 +1,10 @@
 --!strict
 --!optimize 2
 
--- Bracket probes (A before a library's own connection, B after it), deferred probes and passive remote counters.
 local RunService = game:GetService("RunService")
 
 local Probe = {}
 
--- Open brackets of one runtime; a listener that runs while open > 0 is inside a measured window.
 export type Window = { open: number }
 
 export type Bracket = {
@@ -28,7 +26,6 @@ export type Counter = {
 	sizeOf: ((any) -> number)?,
 }
 
--- Every 30th table invocation is sized with RemotePacketSizeCounter (BridgeNet2 only).
 local SAMPLE_EVERY = 30
 
 function Probe.window(): Window
@@ -47,7 +44,6 @@ function Probe.resetCounter(c: Counter)
 	c.sampledBytes = 0
 end
 
--- Bytes seen by a counter: exact for buffers (+1 per ref), estimated from samples for tables.
 function Probe.bytes(c: Counter): (number, boolean)
 	if c.sampled > 0 then
 		return c.sampledBytes / c.sampled * c.calls + c.refs, true
@@ -73,7 +69,6 @@ function Probe.bracket(window: Window): Bracket
 	return { window = window, total = 0, windows = 0, opened = false, armed = false, t0 = 0, connections = {} }
 end
 
--- Whichever probe runs first in an invocation opens the window, the other one closes it.
 local function toggle(br: Bracket)
 	if not br.armed then
 		return
@@ -90,7 +85,6 @@ local function toggle(br: Bracket)
 	end
 end
 
--- Probe A: connect it before the library connects to `signal`. A counter makes it count invocations too.
 function Probe.openA(br: Bracket, signal: RBXScriptSignal, counter: Counter?)
 	local connection: RBXScriptConnection
 	if counter then
@@ -111,7 +105,6 @@ function Probe.openA(br: Bracket, signal: RBXScriptSignal, counter: Counter?)
 	table.insert(br.connections, connection)
 end
 
--- Probe B: connect it after the library's own connection exists; arms the bracket.
 function Probe.closeB(br: Bracket, signal: RBXScriptSignal)
 	table.insert(
 		br.connections,
@@ -122,7 +115,6 @@ function Probe.closeB(br: Bracket, signal: RBXScriptSignal)
 	br.armed = true
 end
 
--- A probe that toggles `br` from a deferred thread (one reused coroutine, queued at most once).
 local function deferredToggle(br: Bracket): () -> ()
 	local queued = false
 	local thread = coroutine.create(function()
@@ -140,14 +132,10 @@ local function deferredToggle(br: Bracket): () -> ()
 	end
 end
 
--- Deferred probes bracket the threads a library task.defers from its `signal` handlers (Loren's server
--- flush). Both probes queue a resume, so the FIFO deferred queue runs open, the library's threads, close.
--- Connect A before the sync probe A and B after the sync probe B, so the sync bracket excludes them.
 function Probe.openDeferredA(br: Bracket, signal: RBXScriptSignal)
 	table.insert(br.connections, signal:Connect(deferredToggle(br)))
 end
 
--- Arms at the next PreSimulation, so arming never lands between an open and its close in one queue.
 function Probe.closeDeferredB(br: Bracket, signal: RBXScriptSignal)
 	table.insert(br.connections, signal:Connect(deferredToggle(br)))
 	RunService.PreSimulation:Once(function()
@@ -160,12 +148,10 @@ function Probe.reset(br: Bracket)
 	br.windows = 0
 end
 
--- A passive probe: fn(...) on every invocation, wherever it lands in the handler order.
 function Probe.passive(signal: RBXScriptSignal, fn: (...any) -> ()): RBXScriptConnection
 	return signal:Connect(fn)
 end
 
--- Fires three dummy Heartbeat connections for a few frames: "FIFO", "LIFO" or "mixed".
 function Probe.connectOrder(): string
 	local seen: { number } = {}
 	local connections: { RBXScriptConnection } = {}

@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- LorenBench client: boots every selected library between bracket probes, then answers the server's commands.
 if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
@@ -59,7 +58,6 @@ if settings.Scenario ~= "bench" or settings.problem then
 	return
 end
 
--- 1. The server sets Bench.Ready once every library exists on its side.
 while BenchFolder:GetAttribute("Ready") ~= true do
 	BenchFolder:GetAttributeChangedSignal("Ready"):Wait()
 end
@@ -80,7 +78,6 @@ type ClientRuntime = {
 	PostSimulationDeferred: Probe.Bracket,
 }
 
--- 2. Each library: remote probes A, boot, every bench listener, ready, then probes B.
 local runtimes: { [string]: ClientRuntime } = {}
 local adapters: { [string]: Plan.Adapter } = {}
 local boot: { [string]: any } = {}
@@ -163,8 +160,6 @@ local function delta(after: any, before: any, key: string): number
 	return num(after[key]) - num(before[key])
 end
 
--- [[ Run state ]]
-
 type Sample = { t: number, send: number }
 
 type Active = {
@@ -183,10 +178,8 @@ type Active = {
 
 local active: Active? = nil
 local idleSend = 0
--- Each runtime's own frame work per frame (seconds) in the last idle phase, nothing to send.
 local idleFrameWork: { [string]: number } = {}
 
--- Connected after every bracket, so its own work is outside every measured window.
 RunService.Heartbeat:Connect(function()
 	local a = active
 	if a == nil then
@@ -201,7 +194,6 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
--- Stats.DataReceiveKbps stays 0 on loopback, so only the send rate is sampled (KB/s is computed from bytes).
 task.spawn(function()
 	while true do
 		task.wait(0.5)
@@ -235,7 +227,6 @@ local function sendRate(a: Active, from: number, to: number): number
 	return mean(list)
 end
 
--- A library's own per-frame work: its Heartbeat and PostSimulation handlers and what they defer (bracketed).
 local function frameWork(cr: ClientRuntime): number
 	return cr.Heartbeat.total + cr.PostSimulation.total + cr.HeartbeatDeferred.total + cr.PostSimulationDeferred.total
 end
@@ -257,8 +248,6 @@ local function resetBrackets(cr: ClientRuntime)
 	Probe.reset(cr.HeartbeatDeferred)
 	Probe.reset(cr.PostSimulationDeferred)
 end
-
--- [[ Commands ]]
 
 local function onIdle(message: any)
 	local seconds = num(message.seconds)
@@ -329,7 +318,6 @@ local function onArm(message: any)
 	report:FireServer({ kind = "armed", runId = message.runId, ok = true })
 end
 
--- S->C: waits for everything (or 2 s without progress, cap 30 s), then reports what arrived.
 local function onDrain(message: any)
 	local a = active
 	if a == nil or a.runId ~= message.runId or a.stream == nil then
@@ -357,7 +345,6 @@ local function onDrain(message: any)
 	end
 
 	local startServer, stopServer = num(message.startServer), num(message.stopServer)
-	-- recv = the library's remote handlers plus its own Heartbeat/PostSimulation work.
 	local recvS = remoteWork(cr) + frameWork(cr)
 	local bytes, approx = Probe.bytes(cr.counter)
 	local check, why = Payloads.check(def, st.cap)
@@ -388,7 +375,6 @@ local function onDrain(message: any)
 			else nil,
 	}
 	if capped then
-		-- Let the backlog land before the next run, so it does not share the network with it.
 		local quietSince, settleEnd = os.clock(), os.clock() + SETTLE_CAP
 		local last = st.n
 		while os.clock() - quietSince < DRAIN_QUIET and os.clock() < settleEnd do
@@ -403,7 +389,6 @@ local function onDrain(message: any)
 	report:FireServer(result)
 end
 
--- A failed arm elsewhere: forget this run so nothing stale stays armed.
 local function onDisarm(message: any)
 	local a = active
 	if a == nil or a.runId ~= message.runId then
@@ -415,9 +400,6 @@ local function onDisarm(message: any)
 	active = nil
 end
 
--- C->S: fires on a fixed 60 Hz tick from PreSimulation for `seconds`, whatever the client's FPS, so the load
--- never depends on it. flush = the explicit flush calls plus the library's own frame work, less its idle frame
--- work (from the idle phase) for every frame beyond one per tick: each tick pays one frame of it, as at 60 FPS.
 local function onFire(message: any)
 	local a = active
 	if a == nil or a.runId ~= message.runId or a.step == nil then
@@ -452,7 +434,6 @@ local function onFire(message: any)
 			return
 		end
 		allFrames += 1
-		-- One fire per 60 Hz tick at most (the accumulator keeps the long-run rate at 60/s).
 		acc += dt
 		if acc < TICK * 0.9 then
 			return
@@ -480,9 +461,6 @@ local function onFire(message: any)
 	while not finished do
 		task.wait()
 	end
-	-- A delayed send (e.g. Loren's flush credit) still counts: only the idle baseline of extra frames goes.
-	-- Slightly too much for Loren above 60 FPS (a few us per tick): its idle average includes empty credit
-	-- flushes that a run's non-tick frames skip.
 	local adjS = math.min(workS, math.max(0, allFrames - ticks) * (idleFrameWork[cr.key] or 0))
 	flushS += workS - adjS
 	local stopServer = workspace:GetServerTimeNow()
@@ -544,7 +522,6 @@ control.OnClientEvent:Connect(function(message: any)
 	end)
 end)
 
--- 3. Boot results first (the server collects them once), then hello.
 local failed = {}
 for key, value in boot do
 	if value ~= true then

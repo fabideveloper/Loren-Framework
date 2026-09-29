@@ -1,5 +1,4 @@
 --!strict
--- Round 1.5 (design/loren-2.0/SIGNALS-RESEARCH.md O6, O11): a runner's parse calls ClientEvent listeners itself.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -31,8 +30,6 @@ local BOOM = "ServerInline.spec: a listener failed on purpose (expected in the o
 type Fire = { channel: string, player: any, frame: buffer, refs: { any }? }
 
 local function noop(...: any) end
-
--- Harness state (rebuilt by setup) -------------------------------------------------------------------
 
 local now = 1000
 local rt: any = nil
@@ -153,7 +150,6 @@ local function waitFor(predicate: () -> boolean, seconds: number)
 	end
 end
 
--- Resets Log (full budget) and captures its warning lines.
 local function captureWarnings(): { string }
 	local lines: { string } = {}
 	Log._reset()
@@ -162,8 +158,6 @@ local function captureWarnings(): { string }
 	end)
 	return lines
 end
-
--- C->S frames ----------------------------------------------------------------------------------------
 
 local function R(name: string): any
 	local r = byName[name]
@@ -185,7 +179,6 @@ local function bytes(list: { number }): buffer
 	return b
 end
 
--- seq:u16 nmsg:u16 nrefs:u8, then `body` as it is (each message already has its length byte).
 local function rawFrame(nmsg: number, body: { buffer }, nrefs: number?): buffer
 	local total = 5
 	for _, part in body do
@@ -204,7 +197,6 @@ local function rawFrame(nmsg: number, body: { buffer }, nrefs: number?): buffer
 	return b
 end
 
--- A message with its 1-byte length in front.
 local function prefixed(m: buffer): buffer
 	assert(buffer.len(m) < 128, "test message too long for a 1-byte length")
 	local b = buffer.create(buffer.len(m) + 1)
@@ -230,7 +222,6 @@ local function callMsg(name: string, callId: number, ...: any): buffer
 	return writerBytes(w)
 end
 
--- A reliable ClientEvent message and its refs (frame-absolute: at most one message with refs per frame).
 local function eventMsg(name: string, ...: any): (buffer, { any })
 	local r = R(name)
 	local w = Codec.newWriter(64, true)
@@ -243,7 +234,6 @@ local function ev(tag: string): buffer
 	return (eventMsg("Ev", tag))
 end
 
--- A route head (by id) and then raw payload bytes, for payloads no honest encoder writes.
 local function headMsg(id: number, payload: { number }): buffer
 	local w = Codec.newWriter(16, true)
 	Codec.writeHead(w, id)
@@ -307,7 +297,6 @@ local function violations(): number
 	return Violations.totals().violations
 end
 
--- Records "<prefix><tag>" for every Ev message.
 local function listen(prefix: string): any
 	return rt.events.S.Ev:Connect(function(_: any, tag: any)
 		table.insert(trail, prefix .. tostring(tag))
@@ -338,7 +327,7 @@ return function(t: any)
 			local base = messagesIn()
 			rt.events.S.Ev:Connect(function(_: any, tag: any)
 				table.insert(threads, coroutine.running())
-				table.insert(seen, messagesIn() - base) -- MessagesIn counts a message after its listeners
+				table.insert(seen, messagesIn() - base)
 				table.insert(trail, "1:" .. tostring(tag))
 			end)
 			listen("2:")
@@ -367,7 +356,7 @@ return function(t: any)
 			rt.events.S.Ev:Connect(function(_: any, tag: any, ...: any)
 				table.insert(trail, "2:" .. tostring(tag))
 				if tag == "y" then
-					got = table.pack(...) -- after the takeover: every argument of the message
+					got = table.pack(...)
 				end
 			end)
 			local yMsg, yRefs = eventMsg("Ev", "y", part, 7)
@@ -379,10 +368,10 @@ return function(t: any)
 				table.insert(want, "1:" .. tag)
 				table.insert(want, "2:" .. tag)
 			end
-			table.insert(msgs, (eventMsg("Ev"))) -- no arguments
+			table.insert(msgs, (eventMsg("Ev")))
 			table.insert(want, "1:nil")
 			table.insert(want, "2:nil")
-			table.insert(msgs, headMsg(R("Sig").id, {})) -- a Route violation ends the frame
+			table.insert(msgs, headMsg(R("Sig").id, {}))
 			local base, viol = messagesIn(), violations()
 			Transport._test.frame(false, p, frameOf(msgs, 1), yRefs)
 			expect(trail).toEqual(want)
@@ -397,7 +386,7 @@ return function(t: any)
 			waitFor(function(): boolean
 				return #trail > #want
 			end, 2)
-			frames(3) -- the parked runner resumes: it must not deliver, count or record anything again
+			frames(3)
 			table.insert(want, "1:y resumed")
 			expect(trail).toEqual(want)
 			expect(messagesIn() - base).toBe(31)
@@ -415,7 +404,6 @@ return function(t: any)
 				end
 			end)
 			listen("2:")
-			-- One byte after the last message: a Framing violation at the frame's end.
 			local frame = rawFrame(2, { prefixed(ev("a")), prefixed(ev("last")), bytes({ 0 }) })
 			local base, viol = messagesIn(), violations()
 			Transport._test.frame(false, p, frame, nil)
@@ -470,7 +458,7 @@ return function(t: any)
 				end
 			end)
 			Transport._test.frame(false, a, frameOf({ ev("1"), ev("y"), ev("2") }), nil)
-			Transport._test.frame(false, b, frameOf({ ev("3"), ev("4") }), nil) -- the same pooled parse state
+			Transport._test.frame(false, b, frameOf({ ev("3"), ev("4") }), nil)
 			local ua, ub = tostring(a.UserId), tostring(b.UserId)
 			expect(trail).toEqual({ ua .. ":1", ua .. ":y", ua .. ":2", ub .. ":3", ub .. ":4" })
 			expect(#lines).toBe(0)
@@ -494,7 +482,6 @@ return function(t: any)
 			end)
 			listen("2:")
 			Transport._test.frame(false, p, frameOf({ ev("a"), ev("b"), ev("reset"), ev("c"), ev("d") }), nil)
-			-- "reset" counts in the zeroed stats; "c" meets no routes: a Route violation ends the frame.
 			expect(trail).toEqual({ "1:a", "2:a", "1:b", "2:b", "1:reset", "2:reset" })
 			expect(messagesIn()).toBe(1)
 			expect(violations()).toBe(1)
@@ -566,7 +553,6 @@ return function(t: any)
 	end)
 
 	describe("server: hostile messages met by the runner's parse", function()
-		-- [Ev a, Ev b, bad, Ev c] from a fresh player: "a" hands the parse to a runner, which meets `bad` itself.
 		local function hostile(bad: buffer): (any, number, number)
 			local p = newPlayer()
 			table.clear(trail)
@@ -600,7 +586,7 @@ return function(t: any)
 		it("a message longer than the frame is a Framing fault at that message", function()
 			local p = newPlayer()
 			listen("ev ")
-			local short = bytes({ 60, R("Ev").id }) -- says 60 bytes, then the frame ends
+			local short = bytes({ 60, R("Ev").id })
 			local base, viol = messagesIn(), violations()
 			Transport._test.frame(false, p, rawFrame(3, { prefixed(ev("a")), prefixed(ev("b")), short }), nil)
 			expect(trail).toEqual({ "ev a", "ev b" })
@@ -648,7 +634,7 @@ return function(t: any)
 			rt.events.S.Ev:Connect(function(_: any, tag: any)
 				table.insert(trail, "ev " .. tostring(tag))
 				if tag == "arm" then
-					mw.Ev = deny -- installed mid-frame by a listener
+					mw.Ev = deny
 				end
 			end)
 			Transport._test.frame(false, p, frameOf({ ev("a"), ev("arm"), ev("x"), ev("y") }), nil)
@@ -658,7 +644,6 @@ return function(t: any)
 			table.clear(trail)
 			Transport._test.frame(false, p, frameOf({ ev("a"), ev("x") }), nil)
 			expect(trail).toEqual({ "ev a", "ev x" })
-			-- An OOP module: no raw Middleware, one through __index.
 			module.Middleware = nil
 			setmetatable(module :: any, { __index = { Middleware = { Ev = deny } } })
 			table.clear(trail)
@@ -666,7 +651,6 @@ return function(t: any)
 			expect(trail).toEqual({ "ev a", "ev b" })
 			expect(st(p).viol.winDrop[DROP.EventDenied]).toBe(2)
 			setmetatable(module :: any, nil)
-			-- A Middleware value that is not a table is ignored, as Dispatch.event ignores it.
 			module.Middleware = 5
 			table.clear(trail)
 			Transport._test.frame(false, p, frameOf({ ev("a"), ev("x") }), nil)
@@ -703,10 +687,9 @@ return function(t: any)
 			rt.events.S.Ev:Connect(function(_: any, tag: any)
 				if tag == "park" then
 					parked = coroutine.running()
-					coroutine.yield() -- parked for good (cancelled below)
+					coroutine.yield()
 				end
 			end)
-			-- "park" third: the runner's own parse calls it, not the delivery that started the runner.
 			local function send()
 				local frame = frameOf({ ev("pad1"), ev("pad2"), ev("park"), ev("pad3") })
 				weak.frame = frame
@@ -717,7 +700,6 @@ return function(t: any)
 			expect(parked).never.toBeNil()
 			Transport._test.removePlayer(p)
 			flush()
-			-- Two collections of controls made after send(): the second cycle began with both unreachable.
 			local rounds = 0
 			local junk: { any } = {}
 			local deadline = os.clock() + 10

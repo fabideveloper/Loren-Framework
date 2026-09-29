@@ -20,11 +20,10 @@ type Route = Outbox.Route
 type RouteTable = Outbox.RouteTable
 type PlayerState = Outbox.PlayerState
 
--- One admitted C->S frame being parsed (a Signal.Cursor, handed to a fresh runner when a listener yields).
 type Parse = {
-	owner: number, -- 0 while the parse runs inline in onFrame, then the runner's serial
+	owner: number,
 	busy: boolean,
-	pos: number, -- messages started, stored when listeners are called (the message whose listeners run while `ev` is set)
+	pos: number,
 	node: any,
 	stop: number,
 	ps: any,
@@ -37,9 +36,9 @@ type Parse = {
 	isUnreliable: boolean,
 	seq: number,
 	now: number,
-	p: number, -- offset of the next message
-	ev: any, -- the ServerEvent whose listeners are running, or nil
-	evN: number, -- its argument count; the arguments are a1 (one) or args[1..evN] (argv is free again)
+	p: number,
+	ev: any,
+	evN: number,
 	a1: any,
 	args: { any },
 }
@@ -68,8 +67,8 @@ local KIND_SIGNAL = C.Kind.Signal
 local NOTICE_SHUTTING_DOWN = C.Notice.ShuttingDown
 local ARGV_CLEAR_MAX = 256
 local MEMORY_CATEGORY = N.MemoryCategory
-local ABANDONED = -1 -- parse result: another runner owns the frame now; this one leaves it alone
-local DELIVER = -2 -- inline parse result: a runner calls st.ev's listeners (arguments in st.a1 / st.args) and parses on
+local ABANDONED = -1
+local DELIVER = -2
 local NO_FRAME = buffer.create(0)
 
 local V_ENVELOPE = V.Envelope
@@ -137,7 +136,7 @@ local flushScheduled = false
 local generation = 0 -- bumped by prepare/_reset; an old flush thread sees it and ends
 local clock: () -> number = os.clock
 local parseFaultLogged = false
-local spareParse: Parse? = nil -- the parse state the next frame uses (a nested frame gets a new one)
+local spareParse: Parse? = nil
 
 -- The server's decoder state: one ReadCtx and one argv (section 9 Scratch ownership).
 local ctx: Types.ReadCtx = Codec.newReadCtx(true, true)
@@ -206,7 +205,6 @@ end
 
 -- Receive ------------------------------------------------------------------------------------------
 
--- Releases the arguments of the ClientEvent whose listeners ran.
 local function dropArgs(st: Parse)
 	local n = st.evN
 	st.a1 = nil
@@ -219,7 +217,7 @@ local function dropArgs(st: Parse)
 	st.evN = 0
 end
 
--- Section 4.10 step 8 from st.pos/st.p by runner `me` (0 = inline, which returns DELIVER at the first listener to call).
+-- Section 4.10 step 8: every message of an admitted frame. Returns 0, ABANDONED, DELIVER or a C.Violation kind.
 @native
 local function parse(st: Parse, me: number): number
 	local c = ctx
@@ -248,20 +246,17 @@ local function parse(st: Parse, me: number): number
 	-- b. Exactly nmsg messages.
 	while i < nmsg do
 		if st.owner ~= me then
-			return ABANDONED -- this runner stopped outside a listener and lost the frame: it never parses on
+			return ABANDONED
 		end
 		i += 1
-		-- Set when this runner calls the message's listeners itself, right after the block (only on a runner).
 		local ev: any = nil
 		local evN = 0
 		local a1: any = nil
 		do
-			-- Keep the call below first after this block: it reuses these registers, so a parked listener holds none.
 			local frame: buffer = st.frame
 			local ps: PlayerState = st.ps
 			local lim = ps.lim
 			local viol = ps.viol
-			-- The 1-byte length and route head inline: the same results as readVarint and readHead.
 			local b0 = if p < len then buffer.readu8(frame, p) else 0x80
 			local mlen, q0
 			if b0 < 0x80 then
@@ -273,7 +268,7 @@ local function parse(st: Parse, me: number): number
 				return V_FRAMING
 			end
 			local mend = q0 + mlen
-			local h, q = buffer.readu8(frame, q0), q0 + 1 -- q0 < mend: mlen >= 1
+			local h, q = buffer.readu8(frame, q0), q0 + 1
 			if h == 0 or h > 0xDF then
 				h, q = readHead(frame, q0, mend)
 			end
@@ -343,7 +338,6 @@ local function parse(st: Parse, me: number): number
 					p = mend
 					continue
 				end
-				-- Codec.beginMessage, inline
 				c.err = 0
 				c.errArg = 0
 				c.nodes = 0
@@ -403,7 +397,6 @@ local function parse(st: Parse, me: number): number
 				ps.rxSeq[h] = s
 				ps.rxSeqT[h] = now
 			end
-			-- Codec.beginMessage, inline
 			c.err = 0
 			c.errArg = 0
 			c.nodes = 0
@@ -424,7 +417,6 @@ local function parse(st: Parse, me: number): number
 				clearArgv(n, args.maxArgs)
 				return V_PAYLOAD
 			end
-			-- Dispatch.event's own middleware probe, inline: it is called only when its answer could be true.
 			local module: any = route.module
 			local guarded = mwState.n > 0
 			if not guarded and type(module) == "table" then
@@ -434,7 +426,6 @@ local function parse(st: Parse, me: number): number
 					else type(t) == "table" and rawget(t, route.member) ~= nil
 			end
 			if guarded and event(ps, route, argv, n) then
-				-- Middleware took it (its thread got the arguments).
 				if n == 1 then
 					argv[1] = nil
 				else
@@ -444,10 +435,9 @@ local function parse(st: Parse, me: number): number
 				p = mend
 				continue
 			end
-			local target: Types.ServerEvent = route.event :: any -- an Event route always has one
+			local target: Types.ServerEvent = route.event :: any
 			if me == 0 then
 				if i < nmsg and not quietEvent(target) then
-					-- A runner calls the listeners and parses on; args go to `st` (a reset clears argv).
 					st.pos = i
 					st.p = mend
 					st.ev = target
@@ -461,7 +451,6 @@ local function parse(st: Parse, me: number): number
 					end
 					return DELIVER
 				end
-				-- The last message, or nobody listens: Signal's own path, as before B2 (nothing to hand over).
 				if n == 1 then
 					deliverEvent(target, ps.player, argv[1])
 					argv[1] = nil
@@ -473,7 +462,6 @@ local function parse(st: Parse, me: number): number
 				p = mend
 				continue
 			end
-			-- On a runner: the call after this block runs the listeners; `st` holds what a takeover needs first.
 			st.pos = i
 			st.p = mend
 			st.ev = target
@@ -494,13 +482,13 @@ local function parse(st: Parse, me: number): number
 			then deliverEventIn1(st, me, ev, st.player, a1)
 			else deliverEventIn(st, me, ev, st.player, table.unpack(st.args, 1, evN))
 		if not delivered then
-			return ABANDONED -- a listener yielded: the runner that took over finishes the frame
+			return ABANDONED
 		end
 		st.ev = nil
 		if evN > 1 then
 			dropArgs(st)
 		else
-			st.a1 = nil -- dropArgs, inline
+			st.a1 = nil
 			st.evN = 0
 		end
 		messagesIn += 1
@@ -512,7 +500,6 @@ local function parse(st: Parse, me: number): number
 	return 0
 end
 
--- Frame cleanup and the violation record: once, by the runner that finished the parse.
 local function finishFrame(st: Parse, ok: boolean, status: any)
 	local ps, player, now = st.ps, st.player, st.now
 	if st.nrefs > 0 then
@@ -523,7 +510,7 @@ local function finishFrame(st: Parse, ok: boolean, status: any)
 	st.frame = NO_FRAME
 	st.refs = nil
 	st.ev = nil
-	dropArgs(st) -- set when the frame ended at a fault inside a message's listeners
+	dropArgs(st)
 	if not ok then
 		if not parseFaultLogged then
 			parseFaultLogged = true
@@ -536,11 +523,9 @@ local function finishFrame(st: Parse, ok: boolean, status: any)
 	end
 end
 
--- On a runner: the rest of st.ev's listeners (after DELIVER or a takeover), then the parse on, as before B2 after a reset.
 local function deliverLoop(st: Parse, me: number): number
 	local ev = st.ev
 	if ev == nil then
-		-- The runner before this one stopped outside a listener (an internal fault): never parse from here again.
 		error("the frame parse stopped outside a listener", 0)
 	end
 	local n = st.evN
@@ -548,15 +533,14 @@ local function deliverLoop(st: Parse, me: number): number
 		then deliverEventIn1(st, me, ev, st.player, st.a1)
 		else deliverEventIn(st, me, ev, st.player, table.unpack(st.args, 1, n))
 	if not delivered then
-		return ABANDONED -- a listener yielded: the runner that took over finishes the frame
+		return ABANDONED
 	end
 	st.ev = nil
 	dropArgs(st)
 	messagesIn += 1
-	return parse(st, me) -- never DELIVER on a runner: it calls later listeners itself
+	return parse(st, me)
 end
 
--- The runner body. A runner that lost the frame to a takeover (it yielded in a listener) leaves it alone.
 local function parseBody(st: Parse, me: number)
 	local ok, status = pcall(deliverLoop, st, me)
 	if st.owner ~= me then
@@ -658,14 +642,12 @@ local function onFrame(isUnreliable: boolean, player: Player, frame: any, refs: 
 	st.node = nil
 	st.ev = nil
 	st.evN = 0
-	st.owner = 0 -- inline; a runner left from an earlier use of `st` has a serial > 0 and never matches
+	st.owner = 0
 	st.busy = true
-	-- Inline until the first ClientEvent whose listeners must be called; from there on pooled runners.
 	local ok, status = pcall(parse, st, 0)
 	if ok and status == DELIVER then
 		local driven, done = pcall(drive, parseBody, st)
 		if not driven or not done then
-			-- No runner could start (the engine refused one), or it stopped outside a listener (drive revoked it).
 			st.busy = false
 			finishFrame(st, false, if driven then "the frame parse stopped outside a listener" else done)
 		end
@@ -958,7 +940,6 @@ Transport._test = table.freeze({
 	argv = function(): { any }
 		return argv
 	end,
-	-- True while the decoder still holds a frame's refs (false between frames).
 	refsHeld = function(): boolean
 		return ctx.refs ~= nil
 	end,

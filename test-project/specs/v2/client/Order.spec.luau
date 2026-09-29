@@ -6,10 +6,10 @@ local OrderPlan = require(ReplicatedStorage.LorenTest.Harness.OrderPlan)
 local ClientNet: any = require(ReplicatedStorage.LorenRuntime.ClientNet)
 local V2 = require(script.Parent._V2)
 
-local ARM_WAIT = 180 -- every client must reach this spec; they run the same specs in the same order
+local ARM_WAIT = 180
 local DONE_WAIT = 30
-local BLOB_SENDS = 3 -- mirrors fixtures/v2/Services/OrderService (BLOB_SENDS)
-local BLOB_CONTROL_ID = 8 -- mirrors OrderService (BLOB_CONTROL_ID): the 800 B control messages
+local BLOB_SENDS = 3
+local BLOB_CONTROL_ID = 8
 
 type Round = {
 	role: string?,
@@ -22,7 +22,6 @@ type Round = {
 	problem: string?,
 }
 
--- Raises with the first difference (the runner shows only the message).
 local function sameList(got: { string }, want: { string })
 	for i = 1, math.max(#got, #want) do
 		if got[i] ~= want[i] then
@@ -175,7 +174,7 @@ return function(t: any)
 				return round.done
 			end, DONE_WAIT)
 			if finished then
-				V2.waitUntil(function() -- the unreliable Blob channel is not ordered with "done"
+				V2.waitUntil(function()
 					local exact, control = false, false
 					for _, blob in round.blobs do
 						exact = exact or blob.n ~= BLOB_CONTROL_ID
@@ -230,13 +229,11 @@ return function(t: any)
 					control += 1
 					expect(blob.len).toBe(r.control)
 				else
-					-- 1..BLOB_SENDS only: the probe (0) and the 901 B sends (BlobOverId) raised on the server
 					expect(type(blob.n) == "number" and blob.n >= 1 and blob.n <= BLOB_SENDS).toBe(true)
 					expect(blob.len).toBe(r.exact)
 					exact += 1
 				end
 			end
-			-- Unreliable: one of the BLOB_SENDS sends is enough (loopback Studio does not drop them).
 			if exact == 0 and control > 0 then
 				error(
 					"the 800 B control messages arrived but no 900 B one did: the engine's unreliable cap is below "

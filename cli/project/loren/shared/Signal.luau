@@ -29,7 +29,7 @@ type List = {
 	_head: Node?,
 	_tail: Node?,
 	_serial: number,
-	_solo: Node?, -- the only linked node when it is not a Once (O12: a delivery calls it without the walk)
+	_solo: Node?,
 }
 
 type ClientState = {
@@ -62,23 +62,21 @@ type EventState = {
 	_onError: (err: any) -> any, -- xpcall handler, one closure per event
 }
 
--- A delivery in progress. Only the runner whose serial is `owner` may continue it; any other one exits.
 export type Cursor = {
 	owner: number,
-	busy: boolean, -- true until the delivery is finished
-	pos: number, -- the caller's position (message or entry); `pos` and `node` mark progress
-	node: any, -- the listener last called for the current message (nil between messages)
-	stop: number, -- the listener list serial when the current message started
+	busy: boolean,
+	pos: number,
+	node: any,
+	stop: number,
 }
 
--- One Fire of a LocalSignal (or a standalone ClientSignal/ServerEvent delivery), pooled.
 type Job = {
 	owner: number,
 	busy: boolean,
 	pos: number,
 	node: any,
 	stop: number,
-	list: any, -- the signal object being fired
+	list: any,
 }
 
 local PREFIX = C.PREFIX
@@ -109,7 +107,7 @@ local windowClosed = false
 local epoch = 0 -- bumped by _reset; a replay that sees a new epoch stops touching state
 local jobs: { Job } = {}
 local jobsN = 0
-local deliveries = 0 -- delivery serials, never reset: a stale runner can never match a newer delivery
+local deliveries = 0
 
 local function noop(...: any) end
 
@@ -154,7 +152,6 @@ local function run(fn: Fn, ...: any)
 	task.spawn(runner :: thread, fn, ...)
 end
 
--- Runs body(cur, me, ...) on pooled runners until it finishes; a yield or error hands the cursor to a fresh one.
 local function drive(body: any, cur: Cursor, ...: any): boolean
 	while true do
 		local pos, node = cur.pos, cur.node
@@ -165,7 +162,6 @@ local function drive(body: any, cur: Cursor, ...: any): boolean
 		if not cur.busy then
 			return true
 		elseif cur.pos == pos and cur.node == node then
-			-- The runner stopped before reaching user code (an internal fault). Revoked: it can never continue.
 			deliveries += 1
 			cur.owner = deliveries
 			cur.busy = false
@@ -242,7 +238,6 @@ local function disconnectAll(sig: List)
 	end
 end
 
--- In the runner `me`: calls one message's listeners in order (after cur.node on a takeover); false = lost cur.
 local function walk(cur: Cursor, me: number, sig: List, ...: any): boolean
 	local node: Node? = cur.node
 	local stop: number
@@ -256,7 +251,7 @@ local function walk(cur: Cursor, me: number, sig: List, ...: any): boolean
 	end
 	while node do
 		if node._id > stop then
-			break -- connected during this message: runs from the next one
+			break -- connected during this fire: runs from the next one
 		end
 		if node.Connected then
 			local fn = node._fn
@@ -289,7 +284,6 @@ local function takeJob(list: any): Job
 	return job
 end
 
--- A stale runner may still hold the job: it only compares `owner`, which the next use changes.
 local function releaseJob(job: Job)
 	job.list = false
 	job.node = nil
@@ -312,7 +306,6 @@ local function fire(sig: List, ...: any)
 		return
 	end
 	if head == sig._tail then
-		-- One listener (linked, so connected, and older than this fire): its runner has nothing to hand over.
 		local fn = head._fn
 		if head._once then
 			unlink(sig, head)
@@ -548,13 +541,11 @@ local function deliverClient(signal: ClientSignal, ...: any)
 	end
 end
 
--- True when a delivery calls no listener now (Backlog, or nobody listens): ClientNet delivers it without a runner.
 local function quietClient(signal: ClientSignal): boolean
 	local sig: ClientState = signal :: any
 	return sig._draining or sig._buffering or sig._head == nil
 end
 
--- A walk as `walk` from a delivery runner (ClientNet). nil: Backlog, untouched (the caller queues it outside a runner).
 @native
 local function deliverClientIn(cur: Cursor, me: number, signal: ClientSignal, ...: any): boolean?
 	local sig: ClientState = signal :: any
@@ -592,7 +583,6 @@ local function deliverClientIn(cur: Cursor, me: number, signal: ClientSignal, ..
 	return true
 end
 
--- deliverClientIn for one argument (no vararg frame on the hot path).
 @native
 local function deliverClientIn1(cur: Cursor, me: number, signal: ClientSignal, a: any): boolean?
 	local sig: ClientState = signal :: any
@@ -606,7 +596,6 @@ local function deliverClientIn1(cur: Cursor, me: number, signal: ClientSignal, a
 		cur.stop = stop
 		local solo = sig._solo
 		if solo then
-			-- O12: the walk below with one node (connected, not Once, older than this message) calls just this
 			cur.node = solo
 			solo._fn(a)
 			if cur.owner ~= me then
@@ -789,7 +778,6 @@ local function eventErrorText(ev: EventState, err: any): string?
 	return "(" .. typeof(err) .. " error)"
 end
 
--- A listener error the xpcall handler let through the throttle (`trace` is its text with the traceback).
 local function reportFailure(ev: EventState, player: any, trace: any)
 	ev._logged += 1
 	local earlier = ev._errors
@@ -821,7 +809,6 @@ local function callProtected(ev: EventState, fn: Fn, player: any, ...: any)
 	end
 end
 
--- A walk as `walk` (each listener under xpcall) from the server's frame parse runner; deliverEventIn1 for one argument.
 @native
 local function deliverEventIn(cur: Cursor, me: number, event: ServerEvent, player: any, ...: any): boolean
 	local ev: EventState = event :: any
@@ -847,7 +834,7 @@ local function deliverEventIn(cur: Cursor, me: number, event: ServerEvent, playe
 			cur.node = node
 			local ok, trace = xpcall(fn, ev._onError, player, ...)
 			if not ok and trace ~= nil then
-				run(reportFailure, ev, player, trace) -- its own runner, as before B2: a log sink stops only that one
+				run(reportFailure, ev, player, trace)
 			end
 			if cur.owner ~= me then
 				return false
@@ -869,11 +856,10 @@ local function deliverEventIn1(cur: Cursor, me: number, event: ServerEvent, play
 		cur.stop = stop
 		local solo = ev._solo
 		if solo then
-			-- O12: the walk below with one node (connected, not Once, older than this message) calls just this
 			cur.node = solo
 			local ok, trace = xpcall(solo._fn, ev._onError, player, a)
 			if not ok and trace ~= nil then
-				run(reportFailure, ev, player, trace) -- its own runner, as in the walk
+				run(reportFailure, ev, player, trace)
 			end
 			if cur.owner ~= me then
 				return false
@@ -898,7 +884,7 @@ local function deliverEventIn1(cur: Cursor, me: number, event: ServerEvent, play
 			cur.node = node
 			local ok, trace = xpcall(fn, ev._onError, player, a)
 			if not ok and trace ~= nil then
-				run(reportFailure, ev, player, trace) -- its own runner, as before B2: a log sink stops only that one
+				run(reportFailure, ev, player, trace)
 			end
 			if cur.owner ~= me then
 				return false
@@ -910,7 +896,6 @@ local function deliverEventIn1(cur: Cursor, me: number, event: ServerEvent, play
 	return true
 end
 
--- True when a ClientEvent has no listener: Transport then skips it as deliverEvent would, without a runner.
 local function quietEvent(event: ServerEvent): boolean
 	return (event :: any)._head == nil
 end
@@ -928,7 +913,7 @@ local function deliverEvent(event: ServerEvent, player: Player, ...: any)
 		return
 	end
 	if head == ev._tail then
-		local fn = head._fn -- one listener, as in `fire`
+		local fn = head._fn
 		if head._once then
 			unlink(ev, head)
 		end

@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- Server orchestration: idle baselines, warmup, rotated passes, per-run metrics, medians and the report.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -22,7 +21,6 @@ local Table = require(script.Parent:WaitForChild("Table"))
 
 local Runner = {}
 
--- Sync brackets around a library's frame handlers, and deferred ones around what those handlers task.defer.
 export type Brackets = {
 	Heartbeat: Probe.Bracket,
 	PostSimulation: Probe.Bracket,
@@ -32,7 +30,6 @@ export type Brackets = {
 
 export type Context = {
 	settings: Config.Settings,
-	-- The clients the bench started with; every run uses exactly these.
 	players: { Player },
 	clientsChanged: string?,
 	runtimes: { [string]: Plan.Runtime },
@@ -55,7 +52,6 @@ type Idle = {
 local DRAIN_QUIET = 2
 local DRAIN_CAP = 30
 local SETTLE_CAP = 120
--- Clients fire C->S on a 60 Hz tick at any FPS; a client that holds fewer ticks/s sent less load (INVALID).
 local MIN_TICK_HZ = 57
 
 local function broadcast(players: { Player }, message: { [string]: any })
@@ -68,7 +64,6 @@ local function num(v: any): number
 	return if type(v) == "number" and v == v then v else 0
 end
 
--- A number field of a client report table (0 when missing).
 local function field(t: any, key: string): number
 	if type(t) ~= "table" then
 		return 0
@@ -121,7 +116,6 @@ local function isLoren(lib: string): boolean
 	return Config.RUNTIME_OF[lib] == "loren"
 end
 
--- Loren's per-run counters that must stay at 0; returns a description or nil.
 local function lorenIssues(server: { [string]: number }, clients: { [string]: number }): string?
 	local parts = {}
 	for key, value in server do
@@ -148,12 +142,10 @@ local function readHbStat(name: string?): number?
 	return if ok and type(value) == "number" then value else nil
 end
 
--- Server Heartbeat dt p50/p95 in ms from a Sampler summary.
 local function heartbeat(summary: Sampler.Summary): (number, number)
 	return summary.frameMs.p50, summary.frameMs.p95
 end
 
--- A library's own per-frame work: its Heartbeat and PostSimulation handlers and what they defer (bracketed).
 local function frameWork(br: Brackets?): number
 	if br == nil then
 		return 0
@@ -170,7 +162,6 @@ local function resetWork(br: Brackets?)
 	end
 end
 
--- Nil while the game holds exactly the clients the bench started with, otherwise what changed.
 local function clientSetChanged(ctx: Context): string?
 	for _, player in ctx.players do
 		if player.Parent ~= Players then
@@ -193,7 +184,6 @@ local function checkClients(ctx: Context): string?
 	return nil
 end
 
--- Idle baseline; also each library's idle per-frame work in ms (server here, clients in their replies).
 local function idlePhase(ctx: Context, seconds: number): Idle
 	local players = ctx.players
 	local runId = Coordinator.nextRunId()
@@ -266,7 +256,6 @@ local function emptyRun(): Table.Run
 	}
 end
 
--- Arms every client; on any failure the others are disarmed again, so none keeps a stale run.
 local function armAll(players: { Player }, message: { [string]: any }): string?
 	broadcast(players, message)
 	local replies = Coordinator.collect("armed", message.runId, players, 30)
@@ -288,7 +277,6 @@ local function armAll(players: { Player }, message: { [string]: any }): string?
 	return problem
 end
 
--- One S->C run: the server fires from PreSimulation, each client counts, times and checks what it got.
 local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: number, idle: Idle): (Table.Run?, string?)
 	local changed = checkClients(ctx)
 	if changed then
@@ -307,7 +295,6 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		return nil, problem
 	end
 
-	-- flush = the explicit flush call plus the library's own Heartbeat/PostSimulation work.
 	local brackets = ctx.brackets[runtime.key]
 	resetWork(brackets)
 	local flush = runtime.flush
@@ -429,14 +416,12 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	run.recvMs = if #recv > 0 then mean(recv) else nil
 	run.rxCalls = mean(calls)
 	run.bytes = mean(bytes)
-	-- Stats kbps does not register on loopback: per receiver, bytes per sender frame x sender frames/s.
 	run.kbps = run.bytes * run.rate / 1000
 	run.cfps = mean(fps)
 	for _, v in fps do
 		run.cfpsMax = math.max(run.cfpsMax, v)
 	end
 	run.bracket = if brN > 0 then brOk / brN else nil
-	-- Server remote calls: Loren's are counted (FramesOut); the others follow from their send model.
 	local model: Plan.TxModel = runtime.txModel(def)
 	if model == "measured" then
 		run.txCalls = statDelta(after, before, "FramesOut") / f
@@ -454,7 +439,6 @@ local function runS2C(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	return run, nil
 end
 
--- One C->S run: every client fires from PreSimulation; the server counts, checks and times its listeners.
 local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: number, _idle: Idle): (Table.Run?, string?)
 	local changed = checkClients(ctx)
 	if changed then
@@ -503,7 +487,6 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	local summary = sampler:stop()
 	local sent = Coordinator.collect("sent", runId, players, seconds + 30)
 
-	-- Drain: everything each client fired, or 2 s without progress (cap 30 s).
 	local function missing(): boolean
 		for _, player in players do
 			local s = sent[player]
@@ -536,7 +519,6 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	local snapshot = frozen.streams
 	local drainAt = lastAt
 	if capped then
-		-- Let the backlog land before the next run, so it does not share the network with it.
 		local quietSince, settleEnd = os.clock(), os.clock() + SETTLE_CAP
 		local last = delivered()
 		while os.clock() - quietSince < DRAIN_QUIET and os.clock() < settleEnd do
@@ -599,7 +581,6 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		local b, approx = Recv.serverBytes(frozen, player)
 		table.insert(bytes, b / frames)
 		run.bytesApprox = run.bytesApprox or approx
-		-- The client's 60 Hz tick rate over its fire window, and its bytes per second (computed, per client).
 		local durS = num(s.durS)
 		if durS > 0 then
 			table.insert(ticksPerS, num(s.frames) / durS)
@@ -628,7 +609,6 @@ local function runC2S(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 		run.cfpsMax = math.max(run.cfpsMax, v)
 	end
 	run.sendKbps = mean(sendKbps)
-	-- Client remote calls: Loren's are counted (FramesOut); for the others every FireServer arrives once.
 	if runtimeKey == "loren" then
 		run.txCalls = if #senderCalls > 0 then mean(senderCalls) else nil
 	else
@@ -668,7 +648,6 @@ local function runOne(ctx: Context, lib: string, def: Payloads.Def, seconds: num
 	return run, problem
 end
 
--- Medians across runs (clients were already averaged within each run).
 local function medianRun(runs: { Table.Run }): Table.Run?
 	if #runs == 0 then
 		return nil
@@ -774,7 +753,6 @@ local function medianRun(runs: { Table.Run }): Table.Run?
 		if r.bracket ~= nil then
 			lowest = math.min(lowest or 1, r.bracket)
 		end
-		-- Loss, reordering or a client short of 60 ticks/s in any run shows, even when the median run was clean.
 		m.lost = math.max(m.lost, r.lost)
 		m.reord = math.max(m.reord, r.reord)
 		m.cfpsMax = math.max(m.cfpsMax, r.cfpsMax)
@@ -795,7 +773,6 @@ function Runner.run(ctx: Context)
 	local players = ctx.players
 	local benchStarted = os.clock()
 
-	-- Which rows can run each payload: server adapter has the event and every client booted the runtime.
 	local support: { [string]: { [string]: string? } } = {}
 	local clientBoot = Coordinator.collect("benchinfo", 0, players, 1)
 	for _, name in settings.payloads do
@@ -893,7 +870,6 @@ function Runner.run(ctx: Context)
 			table.insert(idleFps, num(r.fps))
 		end
 	end
-	-- Each library's own Heartbeat/PostSimulation work (and what it defers) with nothing to send, paid every run.
 	local libParts = {}
 	for _, key in settings.runtimes do
 		local server = idle.libs[key]
@@ -988,7 +964,6 @@ function Runner.run(ctx: Context)
 		Report.print(lines)
 	end
 
-	-- Final report: the whole table, one BENCH_JSON line per row, the SUMMARY and the result.
 	local invalid: { string } = {}
 	local mixed = ctx.serverOrder == "mixed"
 	for _, player in players do

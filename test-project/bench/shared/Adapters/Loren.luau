@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- Loren (the real runtime) as two rows: typed (Spec + T.*) and untyped (*Any members, no Spec).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -18,7 +17,6 @@ local TYPED: { [string]: string } = {
 	CInputUnreliable = "InputUnreliable",
 }
 
--- Unreliable members need typed Args, so the untyped row has no unreliable payloads.
 local UNTYPED: { [string]: string } = {
 	SBool = "BoolAny",
 	SEntity = "EntityAny",
@@ -28,7 +26,6 @@ local UNTYPED: { [string]: string } = {
 	CInput = "InputAny",
 }
 
--- Server limits raised so the bench measures work, not refusals (the checks still run).
 local FLOOD_CONFIG = {
 	FrameRate = 1e6,
 	FrameBurst = 1e6,
@@ -53,7 +50,6 @@ local R: any = {
 	sizeOf = nil,
 }
 
--- Loren's sender calls are measured (GetStats FramesOut).
 function R.txModel(_def: any): string
 	return "measured"
 end
@@ -90,7 +86,6 @@ local function adapter(lib: string, map: { [string]: string }): any
 		return map[event] ~= nil
 	end
 
-	-- The method is looked up once, like the other adapters' cached library functions.
 	function a.toPlayer(event: string): ((Player, any) -> ())?
 		local name = map[event]
 		if name == nil then
@@ -127,7 +122,6 @@ local function adapter(lib: string, map: { [string]: string }): any
 		end
 	end
 
-	-- Server: ClientEvents (fn(player, value)). Client: Signals (fn(value)).
 	function a.connect(event: string, fn: (any, any) -> ()): boolean
 		local name = map[event]
 		if name == nil then
@@ -167,7 +161,6 @@ end
 
 function R.ready() end
 
--- The facade after setup (GetStats), or nil.
 function R.loren(): any
 	return Loren
 end

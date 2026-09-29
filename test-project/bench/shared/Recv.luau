@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- Receive-side counters: client listeners for S->C runs, server listeners (with handler spans) for C->S runs.
 local Payloads = require(script.Parent.Payloads)
 local Probe = require(script.Parent.Probe)
 
@@ -12,7 +11,6 @@ local HALF = 32768
 
 export type Slot = { fn: ((any, any) -> ())? }
 
--- One receiving stream (a client in S->C, a player on the server in C->S).
 export type Stream = {
 	n: number,
 	trues: number,
@@ -24,7 +22,6 @@ export type Stream = {
 	capN: number,
 }
 
--- Listener spans on the server: groups end at each remote invocation and each Heartbeat.
 export type Span = {
 	k: number,
 	first: number,
@@ -46,7 +43,6 @@ export type ServerRun = {
 	sampledBytes: { [Player]: number },
 }
 
--- Every 30th table invocation is sized with RemotePacketSizeCounter (BridgeNet2 only).
 local SAMPLE_EVERY = 30
 
 local slots: { [string]: Slot } = {}
@@ -62,7 +58,6 @@ local function slotOf(lib: string, event: string): Slot
 	return slot
 end
 
--- The bench listener for one (library, event): connect it once at boot; runs arm and disarm its slot.
 function Recv.listener(lib: string, event: string, swapped: boolean?): (any, any) -> ()
 	local slot = slotOf(lib, event)
 	if swapped then
@@ -89,7 +84,6 @@ function Recv.stream(capN: number): Stream
 	return { n = 0, trues = 0, reord = 0, bad = 0, brOk = 0, last = U16 - 1, cap = table.create(capN), capN = capN }
 end
 
--- Client (S->C): installs this run's handler for `lib` and returns the stream it counts into.
 function Recv.armClient(lib: string, def: Payloads.Def, window: Probe.Window): Stream
 	local capN = if def.kind == "array" or def.kind == "boolarray" then 1 else def.perFrame
 	local st = Recv.stream(capN)
@@ -200,7 +194,6 @@ local function closeGroup(span: Span)
 	span.k = 0
 end
 
--- Server (C->S): installs this run's handler for `lib` (every player) and makes it the active run.
 function Recv.armServer(lib: string, runtime: string, def: Payloads.Def): ServerRun
 	local run: ServerRun = {
 		runtime = runtime,
@@ -248,7 +241,6 @@ function Recv.armServer(lib: string, runtime: string, def: Payloads.Def): Server
 	return run
 end
 
--- A frozen copy of a server run's counters (the live run keeps counting, e.g. while a backlog settles).
 function Recv.snapshot(run: ServerRun): ServerRun
 	closeGroup(run.span)
 	local streams: { [Player]: Stream } = {}
@@ -276,7 +268,6 @@ function Recv.finishServer(lib: string, run: ServerRun)
 	end
 end
 
--- Passive server probe on one of `runtime`'s remotes: counts the invocation and ends the current span group.
 function Recv.serverProbe(runtime: string, sizeOf: ((any) -> number)?, player: Player, a1: any, a2: any)
 	local run = active
 	if run == nil or run.runtime ~= runtime then
@@ -296,7 +287,6 @@ function Recv.serverProbe(runtime: string, sizeOf: ((any) -> number)?, player: P
 	end
 end
 
--- Bytes one player sent in a run: exact for buffers (+1 per ref), estimated for tables.
 function Recv.serverBytes(run: ServerRun, player: Player): (number, boolean)
 	local refs = run.refs[player] or 0
 	local sampled = run.sampled[player] or 0
@@ -306,7 +296,6 @@ function Recv.serverBytes(run: ServerRun, player: Player): (number, boolean)
 	return (run.bytes[player] or 0) + refs, false
 end
 
--- Server Heartbeat (connected after every bracket): ends the span group of the frame.
 function Recv.serverFrame()
 	local run = active
 	if run then

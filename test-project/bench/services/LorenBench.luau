@@ -1,6 +1,5 @@
 --!strict
 
--- The bench's Loren members: typed (Spec + T.*) and untyped reference members (*Any).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Loren: any = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Loren"))
@@ -51,7 +50,7 @@ local LorenBench = {
 		EntityUnreliable = Loren.Signal(Entity, { Unreliable = true }),
 		Input = Loren.Event(Input, { RateLimit = FLOOD }),
 		InputUnreliable = Loren.Event(Input, { Unreliable = true, Coalesce = false, RateLimit = FLOOD }),
-		InputAny = Loren.Event({ RateLimit = FLOOD }), -- options only = untyped; *Any Signals have no Spec
+		InputAny = Loren.Event({ RateLimit = FLOOD }),
 	},
 }
 

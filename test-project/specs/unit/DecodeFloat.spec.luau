@@ -1,5 +1,4 @@
 --!strict
--- Every special f32 and f64 bit pattern in every float slot of every decode fast path, bit for bit against frozen v2.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local ServerStorage = game:GetService("ServerStorage")
@@ -51,11 +50,10 @@ local MAX_S2C = C.Limit.MAX_ARGS_S2C
 local SEMANTIC_MIN = C.DECODE_SEMANTIC_MIN
 local DROP_EVENT_BAD = C.Drop.EventBad
 local SVC = "DecodeFloat"
-local YIELD_AFTER = 0.05 -- seconds of work between yields (Studio stops a script that never yields)
-local CONTEXT = 48 -- characters shown before the first difference of two texts
-local TAIL = 160 -- characters shown from there on
+local YIELD_AFTER = 0.05
+local CONTEXT = 48
+local TAIL = 160
 
--- f32 bit patterns: zeros, subnormals, normals at the edges, infinities, signalling and quiet NaNs (sign and payload)
 local F32_BITS: { { any } } = {
 	{ 0x00000000, "+0" },
 	{ 0x80000000, "-0" },
@@ -89,7 +87,6 @@ local F32_BITS: { { any } } = {
 	{ 0x7FFFFFFF, "the largest quiet NaN" },
 	{ 0xFFFFFFFF, "the largest negative quiet NaN" },
 }
--- f64 bit patterns as { low word, high word, name }
 local F64_BITS: { { any } } = {
 	{ 0, 0, "+0" },
 	{ 0, 0x80000000, "-0" },
@@ -129,8 +126,6 @@ local function patternsFor(width: number): { Pattern }
 end
 
 local function noop(...: any) end
-
--- Exact texts: every number as its f64 bits (NaN sign and payload, -0 and subnormals kept) ----------------
 
 local scratch = buffer.create(8)
 
@@ -173,8 +168,6 @@ local function exact(x: any, depth: number?): string
 	return t .. ":" .. tostring(x)
 end
 
--- Mismatches: all of them are listed, each from just before its first differing character -------------------
-
 local lastYield = os.clock()
 
 local function tick()
@@ -206,8 +199,6 @@ local function check(ck: Checker)
 		error(string.format("%d mismatch(es), all of them:\n  %s", ck.count, table.concat(ck.mismatches, "\n  ")), 0)
 	end
 end
-
--- Shapes, built into descriptors by each side's own T ----------------------------------------------------------
 
 local function S(k: string, extra: { [string]: any }?): Shape
 	local s: Shape = { k = k }
@@ -292,8 +283,6 @@ local function compile(side: Side, shapes: { Shape }, anf: boolean, c2s: boolean
 	return side.Schema.compile(buildList(side.Schema.T, shapes), anf, if c2s then MAX_C2S else MAX_S2C, false)
 end
 
--- Baseline values: the first component of each float group holds a unique marker, found again in the encoding ----
-
 local COMPONENTS: { [string]: { string } } = {
 	V3 = { "X", "Y", "Z" },
 	V2 = { "X", "Y" },
@@ -301,7 +290,6 @@ local COMPONENTS: { [string]: { string } } = {
 	CF = { "X", "Y", "Z", "R00", "R01", "R02", "R10", "R11", "R12", "R20", "R21", "R22" },
 }
 
--- 0.5 + n/1024 (exact in f32 and f64, inside every bound used here) as the f32 or f64 group's first component
 local function mark(mk: Marks, width: number, label: string, names: { string }?): number
 	mk.n += 1
 	assert(mk.n < 128, "DecodeFloat.spec: too many float groups in one baseline")
@@ -373,7 +361,6 @@ local function bytesOf(w: any): buffer
 	return b
 end
 
--- The frozen side's payload for these values (no refs: every shape here is fixed-size or a string).
 local function encodePayload(pc: any, c2s: boolean, values: { any }): buffer
 	local w = OLD.Codec.newWriter(64, c2s)
 	local st = pc.encode(w, #values, table.unpack(values))
@@ -381,7 +368,6 @@ local function encodePayload(pc: any, c2s: boolean, values: { any }): buffer
 	return bytesOf(w)
 end
 
--- Every float slot of a payload: each group's marker found exactly once, then its components 4 bytes apart
 local function locate(b: buffer, groups: { Group }): { Slot }
 	local len = buffer.len(b)
 	local slots: { Slot } = {}
@@ -415,8 +401,6 @@ local function withPattern(b: buffer, at: number, p: Pattern): buffer
 	end
 	return c
 end
-
--- Cases --------------------------------------------------------------------------------------------------------
 
 local THING = STRUCT({
 	v3 = V3,
@@ -483,8 +467,6 @@ local SERVER_EVENTS: { ServerEvent } = {
 	{ name = "Late", args = { STR(4), THING } },
 }
 
--- Schema decoders: one decode as text (status, errArg, count, cursor, counters, argv) --------------------------
-
 local function decodeText(side: Side, pc: any, c2s: boolean, b: buffer): string
 	local SideCodec = side.Codec
 	local ctx = SideCodec.newReadCtx(c2s, c2s)
@@ -493,7 +475,7 @@ local function decodeText(side: Side, pc: any, c2s: boolean, b: buffer): string
 	local argv: { any } = {}
 	local ok, n, q = pcall(pc.decode, b, 0, buffer.len(b), ctx, argv)
 	if not ok then
-		return "decode threw" -- the texts name each side's module: only the fact is compared
+		return "decode threw"
 	end
 	return string.format(
 		"err=%d errArg=%d n=%s q=%s cursor=%d nodes=%d claimed=%d argv=%s",
@@ -531,8 +513,6 @@ local function sweepSchema(ck: Checker, case: Case)
 		end
 	end
 end
-
--- ClientNet: frames of one route, one message per pattern, against the frozen decoder walking the same frame ----
 
 local clientDecoders: { any } = {}
 local clientLines: { string } = {}
@@ -612,7 +592,6 @@ local function clientSetup()
 	end
 end
 
--- The frozen v2 decoder walking the frame as ClientNet does (every Ordered seq here is fresh)
 local function clientOracle(frame: buffer): ({ string }, string?)
 	local OldCodec = OLD.Codec
 	local ctx = OldCodec.newReadCtx(false, false)
@@ -642,7 +621,6 @@ local function clientOracle(frame: buffer): ({ string }, string?)
 	return lines, nil
 end
 
--- One frame of route `id`: this payload once per pattern at `slot`, each message with its route head (and seq)
 local function clientFrame(id: number, payload: buffer, slot: Slot): buffer
 	local ordered = CLIENT_ROUTES[id].ordered == true
 	local pats = patternsFor(slot.width)
@@ -686,8 +664,6 @@ local function sweepClient(ck: Checker, id: number)
 		end
 	end
 end
-
--- Server: C->S frames through Transport (the hostile decoders), against the frozen decoder's C->S result ---------
 
 local serverNow = 1000
 local rt: any = nil
@@ -766,7 +742,6 @@ local function serverSetup()
 	tickCodec = OLD.Schema.compile(nil, true, MAX_C2S, false)
 end
 
--- A C->S message: the route head, then the payload.
 local function c2sMessage(id: number, payload: buffer): buffer
 	local w = Codec.newWriter(buffer.len(payload) + 4, true)
 	Codec.writeHead(w, id)
@@ -774,7 +749,6 @@ local function c2sMessage(id: number, payload: buffer): buffer
 	return bytesOf(w)
 end
 
--- seq:u16 nmsg:u16 nrefs:u8, then each message behind its varint length.
 local function c2sFrame(msgs: { buffer }): buffer
 	frameSeq = (frameSeq + 1) % 65536
 	local w = Codec.newWriter(64, true)
@@ -807,7 +781,6 @@ local function newPlayer(): any
 	return p
 end
 
--- One frame from `p` (the clock moves on first, so no bucket is ever short): (violations, EventBad drops) it caused
 local function send(p: any, msgs: { buffer }): (number, number)
 	serverNow += 10
 	local before = Violations.totals()
@@ -818,7 +791,6 @@ local function send(p: any, msgs: { buffer }): (number, number)
 	return after.violations - before.violations, drops
 end
 
--- What the server must do with this payload: the frozen C->S decode's args, or a drop, or a violation
 local function frozenEvent(e: ServerEvent, payload: buffer): string
 	local OldCodec = OLD.Codec
 	local ctx = OldCodec.newReadCtx(true, true)
@@ -836,7 +808,6 @@ local function frozenEvent(e: ServerEvent, payload: buffer): string
 	return "violation"
 end
 
--- The trail split at its ticks: segment k is what the listeners got after tick k (0: before the first)
 local function segments(list: { string }): { [number]: string }
 	local out: { [number]: string } = { [0] = "" }
 	local k = 0
@@ -852,7 +823,6 @@ local function segments(list: { string }): { [number]: string }
 	return out
 end
 
--- Every pattern at every slot of event `e`: one frame per slot, each pattern's message behind a tick of its own
 local function sweepServer(ck: Checker, e: ServerEvent)
 	local p = newPlayer()
 	local values, groups = baseline(e.args)
@@ -874,7 +844,7 @@ local function sweepServer(ck: Checker, e: ServerEvent)
 			elseif outcome == "violation" or outcome == "decode threw" then
 				wantViolations = 1
 				table.insert(want, "violation")
-				break -- a structural fault ends the frame there
+				break
 			else
 				table.insert(want, outcome)
 			end
@@ -901,7 +871,6 @@ local function sweepServer(ck: Checker, e: ServerEvent)
 	end
 end
 
--- The one-argument events once more, one message per frame (the parse delivers it without a runner)
 local function sweepServerSingles(ck: Checker)
 	for _, e in SERVER_EVENTS do
 		if #e.args ~= 1 or e.args[1].k == "struct" or e.args[1].k == "arr" then
@@ -932,11 +901,8 @@ local function sweepServerSingles(ck: Checker)
 	end
 end
 
--- fixedRun: it builds a Vector3 only from zero, normal and infinite components, and hands the rest back ----------
-
 local ONE_F32 = 0x3F800000
 
--- A subnormal or NaN f32: fixedRun must hand it to decodeFields whatever the hostile guard says
 local function special(x: number): boolean
 	local m = bit32.band(x, 0x7FFFFFFF)
 	return (m > 0 and m < 0x00800000) or m > 0x7F800000
@@ -946,7 +912,6 @@ local function present(x: any): string
 	return tostring(x ~= nil)
 end
 
--- The frozen v2 decode of the Vector3 at o, as text
 local function frozenVector(pc: any, hostile: boolean, b: buffer, o: number): string
 	local OldCodec = OLD.Codec
 	local ctx = OldCodec.newReadCtx(hostile, hostile)
@@ -957,7 +922,6 @@ local function frozenVector(pc: any, hostile: boolean, b: buffer, o: number): st
 	return if ctx.err == 0 then exact(argv[1]) else "err " .. tostring(ctx.err)
 end
 
--- Three Vector3s of ones, the middle one with the pattern in component c: one run into argv, and a run of three structs
 local function sweepFixedRun(ck: Checker, hostile: boolean, anf: boolean)
 	local Schema = NOW.Schema
 	local fixedRun = Schema._test.fixedRun
@@ -1004,8 +968,6 @@ local function sweepFixedRun(ck: Checker, hostile: boolean, anf: boolean)
 		end
 	end
 end
-
--- Test body ----------------------------------------------------------------------------------------------------
 
 return function(t: any)
 	local describe, it = t.describe, t.it

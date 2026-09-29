@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- BlinkBlox 0.41.2 generated modules (bench/libs/blinkblox): X.Fire / X.FireAll / X.On, StepReplication.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -19,7 +18,6 @@ local R: any = {
 	sizeOf = nil,
 }
 
--- StepReplication: one FireAllClients unless a player has own traffic (mixed diverges everyone).
 function R.txModel(def: any): string
 	return if def.mode == "mixed" then "each" else "all"
 end
@@ -50,7 +48,6 @@ function a.has(event: string): boolean
 	return mod[event] ~= nil
 end
 
--- Wrapped in one closure, like every other adapter, so each fire costs the same bench overhead.
 function a.toPlayer(event: string): ((Player, any) -> ())?
 	local found: any = member(event, "Fire")
 	if found == nil then
@@ -84,7 +81,6 @@ function a.toServer(event: string): ((any) -> ())?
 	end
 end
 
--- Server: fn(player, value). Client: fn(value). SingleSync: the listener must not yield.
 function a.connect(event: string, fn: (any, any) -> ()): boolean
 	local on: any = member(event, "On")
 	local missing = on == nil

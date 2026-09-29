@@ -39,7 +39,8 @@ export type ClientRoute = {
 	args: Types.PayloadCodec, -- Method/Event: C->S encode; Signal: S->C decode
 	returns: Types.PayloadCodec | false, -- Method: S->C decode
 	signal: Types.ClientSignal | false, -- Signal routes
-	scalar: number, -- Signal routes: Schema.scalarOp of the Args, read inline by decodeFrame (0 = the codec decodes)
+	scalar: number,
+	fixed: number,
 }
 
 -- A C->S frame being filled or waiting in a channel queue (pooled).
@@ -47,6 +48,7 @@ type Frame = {
 	buf: buffer,
 	cap: number,
 	n: number, -- bytes used, the 5-byte header included
+	lim: number,
 	nmsg: number,
 	refs: { any },
 	nrefs: number,
@@ -69,23 +71,22 @@ type Channel = {
 	ringEvents: { number }, -- events in that frame
 }
 
--- An S->C frame being received: pass 1 decodes it into `tape`, pass 2 delivers it. The first 5 fields: a Signal.Cursor.
 type Batch = {
 	owner: number,
 	busy: boolean,
-	pos: number, -- tape index of the entry being delivered
+	pos: number,
 	node: any,
 	stop: number,
-	gen: number, -- generation at receive: a reset stops the frame
-	n: number, -- tape slots in use (0 between segments)
-	high: number, -- most slots used since `tape` was made (its array is at most 2x this, or TAPE_CAP0)
-	tape: { any }, -- entries in frame order (E_* layouts below)
-	now: number, -- the frame's clock (Ordered checks)
-	refs: { any }?, -- the frame's refs (nil between frames)
-	p: number, -- where pass 1 goes on after a SPLIT
-	cursor: number, -- refs consumed before `p`
-	decoding: boolean, -- pass 1 is running (a throw there still delivers the complete entries)
-	why: string?, -- STOP: the structural error, reported after the tape (as `abort` does)
+	gen: number,
+	n: number,
+	high: number,
+	tape: { any },
+	now: number,
+	refs: { any }?,
+	p: number,
+	cursor: number,
+	decoding: boolean,
+	why: string?,
 	route: ClientRoute?,
 	num: number?,
 }
@@ -116,7 +117,6 @@ local DECODE_MISSING = C.Decode.MISSING_INSTANCE
 local NODE_CHARGE = Limit.NODE_CHARGE
 local REF_CHARGE = Limit.REF_CHARGE
 local MIN_CHARGE = Limit.MIN_CHARGE
-local C2S_SEAL = Limit.C2S_SEAL
 local C2S_MAX_MESSAGE = Limit.C2S_MAX_MESSAGE
 local UNRELIABLE_SEAL = Limit.UNRELIABLE_SEAL
 local MAX_REFS = Limit.MAX_REFS
@@ -127,8 +127,7 @@ local RING = Limit.FRAME_RING
 local ORDERED_RESET = Limit.ORDERED_RESET
 local SEQ_MOD = 65536
 local FRAME_CAP0 = 1024
-local FRAME_KEEP_MAX = 4 * C2S_SEAL -- a recycled frame above this capacity gets a fresh small buffer
-local FRAME_POOL_MAX = 64
+local FRAME_KEEP_MAX = 65536 -- a recycled frame above this capacity gets a fresh small buffer
 local SCRATCH_CAP0 = 1024
 local SCRATCH_KEEP = 2 * C2S_MAX_MESSAGE -- a larger scratch writer is replaced before the next encode
 local ERR_FLAGS_KNOWN = bit32.bor(ErrFlag.Msg, ErrFlag.Data, ErrFlag.Incident)
@@ -141,21 +140,19 @@ local PHASE_CONNECTING = 1
 local PHASE_READY = 2
 local PHASE_FAILED = 3
 
--- Tape entries. Every per-message effect (counters, logs, call state, user code) happens in pass 2, at its entry.
-local E_SIGNAL = 1 -- [E_SIGNAL, signal, argc, args...]: MessagesIn, then the listeners
-local E_SKIP = 2 -- [E_SKIP, messages, dropped]: Signals that deliver nothing (stale Ordered, a typed Instance nil)
-local E_OK = 3 -- [E_OK, req, req.gen, argc, values...]
-local E_MISSING = 4 -- [E_MISSING, req, req.gen]: an OK whose typed Instance arrived nil
-local E_BAD = 5 -- [E_BAD, req, req.gen]: an OK that failed to decode (always the last entry)
-local E_ERR = 6 -- [E_ERR, req, req.gen, code, msg, data, incident]
-local E_NOTICE = 7 -- [E_NOTICE, kind, first, count]
-local DONE = 0 -- pass 1: decoded to the end of the frame
-local SPLIT = 1 -- pass 1: deliver the tape first, then decode on from b.p (see decodeFrame)
-local STOP = 2 -- pass 1: a structural error (b.why) ends the frame after the tape
+local E_SIGNAL = 1
+local E_SKIP = 2
+local E_OK = 3
+local E_MISSING = 4
+local E_BAD = 5
+local E_ERR = 6
+local E_NOTICE = 7
+local DONE = 0
+local SPLIT = 1
+local STOP = 2
 local TAPE_CAP0 = 1024
-local TAPE_KEEP = 16384 -- a tape that held more slots is replaced after its frame
+local TAPE_KEEP = 16384
 
--- Schema ops that decodeFrame reads inline (O1); constants, so the compiler folds them
 local S_BOOL = 1
 local S_U8 = 2
 local S_U16 = 3
@@ -166,7 +163,7 @@ local S_I32 = 7
 local S_F32 = 8
 local S_F64 = 9
 local S_VECTOR3 = 12
-local F32_ABS = 0x7FFFFFFF -- f32 bits without the sign: 0 is zero, below F32_NORMAL subnormal, above F32_INF NaN
+local F32_ABS = 0x7FFFFFFF
 local F32_NORMAL = 0x00800000
 local F32_INF = 0x7F800000
 do
@@ -192,12 +189,22 @@ local ClientNet = {}
 
 local framePool: { Frame } = {}
 local framePoolN = 0
+local sealC2S = Limit.C2S_SEAL
 
-local function newFrame(): Frame
+local function takeFrame(unreliable: boolean): Frame
+	local lim = if unreliable then UNRELIABLE_SEAL else sealC2S
+	if framePoolN > 0 then
+		local fr = framePool[framePoolN]
+		framePool[framePoolN] = nil :: any
+		framePoolN -= 1
+		fr.lim = lim
+		return fr
+	end
 	return {
 		buf = buffer.create(FRAME_CAP0),
 		cap = FRAME_CAP0,
 		n = HEADER,
+		lim = lim,
 		nmsg = 0,
 		refs = {},
 		nrefs = 0,
@@ -207,16 +214,6 @@ local function newFrame(): Frame
 		ncalls = 0,
 		events = 0,
 	}
-end
-
-local function takeFrame(): Frame
-	if framePoolN > 0 then
-		local fr = framePool[framePoolN]
-		framePool[framePoolN] = nil :: any
-		framePoolN -= 1
-		return fr
-	end
-	return newFrame()
 end
 
 -- Empties a frame and returns it to the pool. `refsGiven`: its refs table went to FireServer.
@@ -239,7 +236,7 @@ local function recycle(fr: Frame, refsGiven: boolean)
 		fr.buf = buffer.create(FRAME_CAP0)
 		fr.cap = FRAME_CAP0
 	end
-	if framePoolN < FRAME_POOL_MAX then
+	if framePoolN < 64 then
 		framePoolN += 1
 		framePool[framePoolN] = fr
 	end
@@ -264,7 +261,7 @@ end
 local function newChannel(unreliable: boolean): Channel
 	return {
 		unreliable = unreliable,
-		open = takeFrame(),
+		open = takeFrame(unreliable),
 		queue = {},
 		qhead = 1,
 		qtail = 0,
@@ -322,18 +319,19 @@ local inlineTables = true
 
 -- Scratch (one per side): writer, read context, argv, failed-fire call ids
 local w: Writer = Codec.newWriter(SCRATCH_CAP0, true)
+local encoding = false
 local ctx: ReadCtx = Codec.newReadCtx(false, false)
 local argv: { any } = {}
 local failedIds: { number } = {}
 local nfailed = 0
 local callIdAt = 0 -- offset of the callId in the scratch writer (set by encodeMessage)
 local abortLogged = false
-local spare: Batch? = nil -- the batch the next frame decodes into (a nested receive gets a new one)
-local fillN = 0 -- tape slots of complete entries (pass 1)
-local claimed: { [Req]: boolean } = {} -- calls replied to earlier on the tape being filled
-local claimedList: { Req } = {} -- the same calls in a list, so unclaim is O(replies), not O(the set's capacity)
+local spare: Batch? = nil
+local fillN = 0
+local claimed: { [Req]: boolean } = {}
+local claimedList: { Req } = {}
 local claimedN = 0
-local lastClear = 0 -- tape slots the last clearTape touched (spec hook)
+local lastClear = 0
 
 -- Stats
 local framesIn, bytesIn, messagesIn = 0, 0, 0
@@ -448,7 +446,20 @@ local function encodeMessage(route: ClientRoute, refBase: number, seq: number, n
 	elseif route.ordered then
 		Codec.writeU16(sw, seq)
 	end
-	return route.args.encode(sw, n, ...)
+	encoding = true
+	local st = route.args.encode(sw, n, ...)
+	encoding = false
+	return st
+end
+
+local function resetScratch()
+	local sw = w
+	if sw.cap > SCRATCH_KEEP then
+		sw.buf = buffer.create(SCRATCH_CAP0)
+		sw.cap = SCRATCH_CAP0
+	end
+	Codec.resetWriter(sw)
+	encoding = false
 end
 
 -- Would adding a message (len bytes, its sidecar) to the channel's open frame need a seal first?
@@ -464,7 +475,7 @@ local function needsSeal(ch: Channel, len: number, nrefs: number, nodes: number,
 	if ch.unreliable then
 		return fr.n + bytes > UNRELIABLE_SEAL
 	end
-	return fr.n + NODE_CHARGE * fr.nodes + fr.sideBytes + bytes + NODE_CHARGE * nodes + side > C2S_SEAL
+	return fr.n + NODE_CHARGE * fr.nodes + fr.sideBytes + bytes + NODE_CHARGE * nodes + side > sealC2S
 		or fr.nrefs + nrefs > MAX_REFS
 		or fr.nodes + nodes > MAX_NODES
 end
@@ -476,7 +487,7 @@ local function seal(ch: Channel)
 	end
 	ch.qtail += 1
 	ch.queue[ch.qtail] = fr
-	ch.open = takeFrame()
+	ch.open = takeFrame(ch.unreliable)
 end
 
 -- Appends one message (len:varint + bytes, and its refs) to the open frame.
@@ -504,8 +515,14 @@ local function commit(
 		table.move(refs, 1, nrefs, fr.nrefs + 1, fr.refs)
 		fr.nrefs += nrefs
 	end
-	fr.nodes += nodes
-	fr.sideBytes += side
+	local weight = NODE_CHARGE * nodes + side
+	if weight > 0 then
+		fr.nodes += nodes
+		fr.sideBytes += side
+		if not ch.unreliable then
+			fr.lim -= weight
+		end
+	end
 	fr.nmsg += 1
 	if callId > 0 then
 		local k = fr.ncalls + 1
@@ -643,29 +660,25 @@ local function flushChannel(ch: Channel, now: number)
 	end
 end
 
-local function commitCoalesced(now: number)
-	for _, id in coList do
-		local len = coLen[id]
-		if len > 0 then
-			if unsent >= unsentCap then
-				return
-			end
-			if Bucket.take(routeBucket[id], 1, now) then
-				local ch = if routes[id].unreliable then unr else rel
-				if needsSeal(ch, len, 0, 0, 0) then
-					seal(ch)
-				end
-				commit(ch, coBuf[id], len, nil, 0, 0, 0, 0, true)
-				coLen[id] = 0
-			end
-		end
-	end
-end
-
 local function flush(now: number)
 	flushes += 1
 	if coList[1] ~= nil then
-		commitCoalesced(now)
+		for _, id in coList do
+			local len = coLen[id]
+			if len > 0 then
+				if unsent >= unsentCap then
+					break
+				end
+				if Bucket.take(routeBucket[id], 1, now) then
+					local ch = if routes[id].unreliable then unr else rel
+					if needsSeal(ch, len, 0, 0, 0) then
+						seal(ch)
+					end
+					commit(ch, coBuf[id], len, nil, 0, 0, 0, 0, true)
+					coLen[id] = 0
+				end
+			end
+		end
 	end
 	flushChannel(rel, now)
 	flushChannel(unr, now)
@@ -719,7 +732,7 @@ end
 
 -- Incoming --------------------------------------------------------------------------------------------
 
--- "Dropped the rest of a server frame", where the one-pass decoder stopped; the text is built for the first one only.
+-- The log text is built only for the first abort (`route` and `num` add detail to `reason`).
 local function abort(reason: string, route: ClientRoute?, num: number?)
 	if abortLogged then
 		return
@@ -832,6 +845,18 @@ local function install(m: Types.ManifestModel)
 			if kind == KIND_SIGNAL then
 				signal = Signal.ClientSignal.new(svc.name, mem.name, mem.backlog)
 			end
+			local fixed = -1
+			local descs = mem.args
+			if kind == KIND_EVENT and descs ~= nil then
+				fixed = 0
+				for _, d in descs do
+					if d.fixed < 0 then
+						fixed = -1
+						break
+					end
+					fixed += d.fixed
+				end
+			end
 			local route: ClientRoute = {
 				id = id,
 				kind = kind,
@@ -849,6 +874,7 @@ local function install(m: Types.ManifestModel)
 				returns = returns,
 				signal = signal,
 				scalar = if kind == KIND_SIGNAL then Schema.scalarOp(mem.args) else 0,
+				fixed = fixed,
 			}
 			table.freeze(route :: any)
 			newRoutes[id] = route
@@ -890,16 +916,20 @@ local function install(m: Types.ManifestModel)
 	end
 	msgCap = math.clamp(math.floor(lim.msgBurst * mirror), 1, MAX_MSGS)
 	unsentCap = 2 * msgCap
+	local sealed = lim.sealC2S
+	sealC2S = if type(sealed) == "number" and sealed >= 1 then math.min(sealed, Limit.C2S_MAX_FRAME) else Limit.C2S_SEAL
+	local open = rel.open
+	open.lim = sealC2S - NODE_CHARGE * open.nodes - open.sideBytes
 	local hz = lim.flushHz
 	interval = 1 / (if type(hz) == "number" and hz >= 1 then hz else Limit.FLUSH_HZ)
 	acc = 0
 	inlineTables = Config.get().InlineTables ~= false
+	w.inlineTables = inlineTables
 	Calls.configure(lim.maxPending)
 	model = m
 	phase = PHASE_READY
 end
 
--- Forgets the calls pass 1 claimed (after each pass 1, and on a fault or reset).
 local function unclaim()
 	for i = 1, claimedN do
 		claimed[claimedList[i]] = nil
@@ -908,7 +938,6 @@ local function unclaim()
 	claimedN = 0
 end
 
--- Pass 1 ends at a structural error: it is reported (abort) after the entries before it are delivered.
 local function stop(b: Batch, why: string, route: ClientRoute?, num: number?): number
 	table.clear(argv)
 	b.why = why
@@ -917,7 +946,7 @@ local function stop(b: Batch, why: string, route: ClientRoute?, num: number?): n
 	return STOP
 end
 
--- Pass 1, b.p on into b.tape: no user code, no visible effect; a lookup the tape could change waits for it (SPLIT).
+-- Decodes one server frame. Returns early (STOP) on a structural error.
 @native
 local function decodeFrame(b: Batch, frame: buffer): number
 	local tape = b.tape
@@ -927,11 +956,11 @@ local function decodeFrame(b: Batch, frame: buffer): number
 	Codec.beginFrame(rctx, b.refs, 0)
 	rctx.cursor = b.cursor
 	local k = 0
-	local skipAt = 0 -- the E_SKIP entry at the tape's end (0 = none): a run of skipped Signals shares one
-	local dropSeen = false -- a FrameDropped NOTICE is on the tape
+	local skipAt = 0
+	local dropSeen = false
 	local p = b.p
 	while p < len do
-		local h, q = buffer.readu8(frame, p), p + 1 -- the 1-byte route head inline (p < len): as Codec.readHead
+		local h, q = buffer.readu8(frame, p), p + 1
 		if h == 0 or h > 0xDF then
 			h, q = Codec.readHead(frame, p, len)
 		end
@@ -950,11 +979,10 @@ local function decodeFrame(b: Batch, frame: buffer): number
 				q += 2
 			end
 			local n = -1
-			local e = 0 -- the decode status: after an inline read rctx.err is stale, so nothing below may read it
-			local v1: any = nil -- the value of a 1-argument message (argv holds the others)
+			local e = 0
+			local v1: any = nil
 			local sop = route.scalar
 			if sop ~= 0 then
-				-- O1: as decodeFields reads it on the trusted side; what this cannot take goes to the codec (same error)
 				if sop == S_BOOL then
 					if q < len then
 						local x = buffer.readu8(frame, q)
@@ -973,13 +1001,11 @@ local function decodeFrame(b: Batch, frame: buffer): number
 						local mx = bit32.band(buffer.readu32(frame, q), F32_ABS)
 						local my = bit32.band(buffer.readu32(frame, q + 4), F32_ABS)
 						local mz = bit32.band(buffer.readu32(frame, q + 8), F32_ABS)
-						-- native code builds Vector3.new(readf32) without the f32 -> f64 -> f32 trip decodeFields makes
 						if
 							(mx == 0 or (mx >= F32_NORMAL and mx <= F32_INF))
 							and (my == 0 or (my >= F32_NORMAL and my <= F32_INF))
 							and (mz == 0 or (mz >= F32_NORMAL and mz <= F32_INF))
 						then
-							-- zero, normal and infinite: that trip keeps them in every float mode; the codec takes the rest
 							v1 = Vector3.new(
 								buffer.readf32(frame, q),
 								buffer.readf32(frame, q + 4),
@@ -1040,7 +1066,6 @@ local function decodeFrame(b: Batch, frame: buffer): number
 				end
 			end
 			if n < 0 then
-				-- Codec.beginMessage, inline
 				rctx.err = 0
 				rctx.errArg = 0
 				rctx.nodes = 0
@@ -1056,10 +1081,9 @@ local function decodeFrame(b: Batch, frame: buffer): number
 					argv[1] = nil
 				end
 			end
-			-- -1: delivered. 0: stale Ordered (decoded to keep the offset and ref cursor right). 1: an Instance nil.
 			local dropped = -1
 			if seq >= 0 and not acceptSeq(h, seq, now) then
-				dropped = 0
+				dropped = 0 -- stale (decoded to keep the offset and ref cursor right)
 			elseif e == DECODE_MISSING then
 				dropped = 1
 			end
@@ -1115,7 +1139,6 @@ local function decodeFrame(b: Batch, frame: buffer): number
 				claimedList[claimedN] = req
 				q += 2
 				local route: ClientRoute = req.route
-				-- Codec.beginMessage, inline
 				rctx.err = 0
 				rctx.errArg = 0
 				rctx.nodes = 0
@@ -1239,7 +1262,6 @@ local function decodeFrame(b: Batch, frame: buffer): number
 				end
 				if model == nil then
 					if k > 0 then
-						-- Never from a real server (a first MANIFEST opens its frame): installed after the tape.
 						b.p = p
 						b.cursor = rctx.cursor
 						return SPLIT
@@ -1266,7 +1288,6 @@ local function decodeFrame(b: Batch, frame: buffer): number
 	return DONE
 end
 
--- ERR for a pending call: counters and the unknown-code rule, then the rejection (user code).
 local function rejectErr(req: Req, code: number, msg: string?, data: any, incident: number?)
 	local arg: number? = nil
 	if code == Err.BadRequest then
@@ -1287,12 +1308,11 @@ local function rejectErr(req: Req, code: number, msg: string?, data: any, incide
 	Calls.reject(req, code, msg, data, incident, arg)
 end
 
--- A NOTICE, in its place among the frame's other messages.
 local function applyNotice(kind: number, first: number, count: number)
 	if kind == Notice.FrameDropped then
 		framesDropped += count
 		eventsLost += ringLost(rel, first, count)
-		local n = Calls.dropped(first, count) -- rejects the dropped calls (user code)
+		local n = Calls.dropped(first, count)
 		callsRateLimited += n
 	elseif kind == Notice.UFrameDropped then
 		framesDropped += count
@@ -1308,26 +1328,23 @@ local function applyNotice(kind: number, first: number, count: number)
 	end -- unknown kinds are ignored (the body is always 5 bytes)
 end
 
--- The call was released after pass 1's lookup (ClientNet.fail, a spec's sweep): the one-pass lookup failed here.
 local function released(req: Req, g: number): boolean
 	return req.gen ~= g or Calls.lookup(req.id) ~= req
 end
 
--- Pass 2 on a runner (Signal.drive): Signal and E_SKIP entries from b.pos; any other entry or a Backlog one ends it.
 @native
 local function deliverBody(b: Batch, me: number)
 	local tape = b.tape
 	local n = b.n
 	local gen = b.gen
 	local t = b.pos
-	-- After a reset, a takeover still ends its message's listeners (the one-pass decoder's `fire` did), then stops.
 	while t <= n and (generation == gen or b.node ~= nil) do
 		local kind = tape[t]
 		if kind == E_SIGNAL then
 			local argc = tape[t + 2]
 			local a = t + 3
 			if b.node == nil then
-				messagesIn += 1 -- a takeover goes on after b.node: its message is already counted
+				messagesIn += 1
 			end
 			local ok
 			if argc == 1 then
@@ -1343,10 +1360,10 @@ local function deliverBody(b: Batch, me: number)
 			end
 			if ok ~= true then
 				if ok == nil then
-					messagesIn -= 1 -- Backlog: deliverTape counts and queues it on the receiving thread, as before B2
+					messagesIn -= 1
 					break
 				end
-				return -- this runner yielded or was left behind: the owner goes on
+				return
 			end
 			t = a + argc
 			b.pos = t
@@ -1362,7 +1379,6 @@ local function deliverBody(b: Batch, me: number)
 	b.busy = false
 end
 
--- Pass 2 on the receiving thread: every entry's effects at its place, a Signal run on deliverBody. False: frame ends.
 @native
 local function deliverTape(b: Batch): boolean
 	local tape = b.tape
@@ -1371,7 +1387,7 @@ local function deliverTape(b: Batch): boolean
 	local t = b.pos
 	while t <= n do
 		if generation ~= gen then
-			return false -- a reset in user code: the one-pass decoder stopped here too
+			return false
 		end
 		local kind = tape[t]
 		if kind == E_SIGNAL then
@@ -1379,7 +1395,7 @@ local function deliverTape(b: Batch): boolean
 			local argc = tape[t + 2]
 			local a = t + 3
 			local after = a + argc
-			if after > n or quiet(sig) then -- the last entry, no listener or Backlog: Signal's own path, as before B2
+			if after > n or quiet(sig) then
 				messagesIn += 1
 				if argc == 1 then
 					deliver(sig, tape[a])
@@ -1411,7 +1427,7 @@ local function deliverTape(b: Batch): boolean
 			t += 4
 			messagesIn += 1
 			applyNotice(nk, first, count)
-		else -- a reply: E_OK, E_ERR, E_MISSING or E_BAD
+		else
 			local req: Req = tape[t + 1]
 			if released(req, tape[t + 2]) then
 				abort(if kind == E_ERR then "ERR for an unknown call id" else "OK for an unknown call id")
@@ -1429,7 +1445,7 @@ local function deliverTape(b: Batch): boolean
 				elseif argc == 0 then
 					Calls.resolve(req)
 				elseif argc == 2 then
-					Calls.resolve(req, tape[a], tape[a + 1]) -- O23: unpack from a > 1 is the slow path
+					Calls.resolve(req, tape[a], tape[a + 1])
 				elseif argc == 3 then
 					Calls.resolve(req, tape[a], tape[a + 1], tape[a + 2])
 				else
@@ -1452,11 +1468,11 @@ local function deliverTape(b: Batch): boolean
 				else
 					Calls.late(req)
 				end
-			else -- E_BAD: never counted (the one-pass decoder dropped the frame before counting it)
+			else
 				if Calls.isPending(req) then
 					Calls.reject(req, Err.InternalError, nil, nil, nil, nil)
 				end
-				abort(b.why :: string, b.route, b.num) -- the last entry; logged even after a reset, as before B2
+				abort(b.why :: string, b.route, b.num)
 				return false
 			end
 		end
@@ -1464,7 +1480,6 @@ local function deliverTape(b: Batch): boolean
 	return true
 end
 
--- Empties slots [1, n] in O(n): table.clear walks the whole array (at most 2 x `high`), so only for 4n >= that.
 @native
 local function clearTape(b: Batch, n: number)
 	b.n = 0
@@ -1488,12 +1503,11 @@ local function clearTape(b: Batch, n: number)
 		lastClear = n
 	end
 	if n > TAPE_KEEP then
-		b.tape = table.create(TAPE_CAP0) -- after a burst the big array is not kept (the old one is empty)
+		b.tape = table.create(TAPE_CAP0)
 		b.high = 0
 	end
 end
 
--- Pass 1 then pass 2, for each segment of the frame (one, unless decodeFrame SPLITs). Under onFrame's pcall.
 local function receive(b: Batch, frame: buffer)
 	while true do
 		fillN = 0
@@ -1526,7 +1540,6 @@ local function receive(b: Batch, frame: buffer)
 	end
 end
 
--- A throw under onFrame's pcall: in pass 1 the complete entries still run, then the log; in pass 2 the rest drops.
 local function onFault(b: Batch, err: any)
 	table.clear(argv)
 	unclaim()
@@ -1540,7 +1553,7 @@ local function onFault(b: Batch, err: any)
 			local ok, going = pcall(deliverTape, b)
 			clearTape(b, n)
 			if not ok then
-				err = going -- a fault at an earlier message: the one-pass decoder never got further
+				err = going
 			elseif not going then
 				return
 			end
@@ -1604,9 +1617,9 @@ local function onFrame(unreliable: boolean, frame: any, refs: any)
 		onFault(b, err)
 	end
 	if refs ~= nil then
-		ctx.refs = nil -- the decoder lets go of the frame's Instances too (a client frame never sets ctx.nrefs)
+		ctx.refs = nil
 	end
-	b.refs = nil -- nothing of this frame stays referenced (a parked listener's runner may still hold `b`)
+	b.refs = nil
 	b.why = nil
 	b.route = nil
 	b.node = nil
@@ -1777,7 +1790,7 @@ function ClientNet.call(route: ClientRoute, try: boolean, n: number, ...: any): 
 	local st = encodeMessage(route, ch.open.nrefs, 0, n, ...)
 	if st ~= ENCODE_OK then
 		local arg = w.errArg
-		Codec.resetWriter(w)
+		resetScratch()
 		return localReject(route, try, Err.BadArgument, C.EncodeName[st], arg)
 	end
 	if w.lossy > 0 then
@@ -1794,7 +1807,7 @@ function ClientNet.call(route: ClientRoute, try: boolean, n: number, ...: any): 
 		failCode, reason = Err.BadArgument, "TooManyRefs"
 	end
 	if failCode ~= 0 then
-		Codec.resetWriter(w)
+		resetScratch()
 		return localReject(route, try, failCode, reason, 0)
 	end
 	if needsSeal(ch, len, nrefs, nodes, side) then
@@ -1803,7 +1816,7 @@ function ClientNet.call(route: ClientRoute, try: boolean, n: number, ...: any): 
 			-- Ref indexes are frame-absolute: re-encode for the new frame (same values, no user code).
 			st = encodeMessage(route, 0, 0, n, ...)
 			if st ~= ENCODE_OK then
-				Codec.resetWriter(w)
+				resetScratch()
 				return localReject(route, try, Err.BadArgument, C.EncodeName[st], 0)
 			end
 			len, nrefs, nodes, side = w.n, w.nrefs, w.nodes, w.sideBytes
@@ -1811,7 +1824,7 @@ function ClientNet.call(route: ClientRoute, try: boolean, n: number, ...: any): 
 	end
 	local req = Calls.alloc(route, now)
 	if req == nil then
-		Codec.resetWriter(w)
+		resetScratch()
 		return localReject(route, try, Err.TooManyInFlight, nil, 0)
 	end
 	buffer.writeu16(w.buf, callIdAt, req.id)
@@ -1917,6 +1930,276 @@ function ClientNet.fire(route: ClientRoute, n: number, ...: any): ()
 	Codec.resetWriter(w)
 end
 
+function ClientNet.eventFire(route: ClientRoute, ev: any, path: string): (...any) -> ()
+	local id = route.id
+	local unreliable = route.unreliable
+	local ordered = route.ordered
+	local coalesce = route.coalesce
+	local codec = route.args
+	local sidecar = codec.refs
+	local maxArgs = codec.maxArgs
+	local plan = Schema.plan(codec)
+	local typed = plan ~= nil
+	local arity = if plan then plan.count else 0
+	local prog: any = if plan then plan.prog else nil
+	local put: any = if plan then plan.put else nil
+	local putN: any = if plan then plan.putN else nil
+	local one = put ~= nil
+	local many = putN ~= nil
+	local sized = plan ~= nil and (plan.size > 0 or arity == 0)
+	local general = typed and not sized and route.fixed >= 0
+	local body = if sized then (plan :: any).size elseif general then route.fixed else -1
+	local dw: Writer? = if general then Codec.newWriter(16, true) else nil
+	local writeArgs = Codec.writeArgs
+	local encodeFields = Schema.encodeFields
+	local take = Bucket.take
+	local tooMany = C.Encode.TOO_MANY_VALUES
+	local headLen = if id <= 0xDF then 1 elseif id <= 4063 then 2 else 3
+	local head2 = if headLen == 2 then 0xE0 + bit32.rshift(id - 224, 8) + bit32.band(id - 224, 0xFF) * 256 else 0
+	local hdr = headLen + (if ordered then 2 else 0)
+	local msgLen = hdr + body
+	local pre = varintSize(msgLen)
+	local size = pre + msgLen
+	local direct = body >= 0
+		and not coalesce
+		and msgLen < 0x4000
+		and (if unreliable then HEADER + size <= UNRELIABLE_SEAL else msgLen <= C2S_MAX_MESSAGE)
+	local pre2 = if pre == 2 then bit32.bor(bit32.band(msgLen, 0x7F), 0x80) + bit32.rshift(msgLen, 7) * 256 else 0
+	local room = 3 + msgLen
+	local dotText = PREFIX .. "Call " .. path .. ":Fire(...) with ':' (a '.' call shifts every argument)"
+	local failText = PREFIX .. route.service .. "." .. route.member .. ":Fire: "
+
+	local function argText(arg: number, st: number): string
+		return string.format(
+			"%s%s.%s:Fire: arg %d %s",
+			PREFIX,
+			route.service,
+			route.member,
+			arg,
+			C.EncodeName[st] or tostring(st)
+		)
+	end
+
+	local function sizeText(len: number, nrefs: number, nodes: number, side: number): string?
+		if unreliable then
+			local total = HEADER + varintSize(len) + len
+			if total > UNRELIABLE_SEAL then
+				return failText
+					.. string.format(
+						"%d bytes is over the unreliable limit (%d bytes per frame, header included)",
+						total,
+						UNRELIABLE_SEAL
+					)
+			end
+		elseif len + NODE_CHARGE * nodes + side > C2S_MAX_MESSAGE then
+			local weight = len + NODE_CHARGE * nodes + side
+			return failText .. string.format("payload too large (%d, max %d)", weight, C2S_MAX_MESSAGE)
+		elseif nodes > MAX_NODES then
+			return failText .. "more than " .. MAX_NODES .. " table values in the arguments"
+		elseif nrefs > MAX_REFS then
+			return failText .. "more than " .. MAX_REFS .. " Instances or other non-plain values in the arguments"
+		end
+		return nil
+	end
+
+	@native
+	local function fire(self: any, ...: any)
+		local n = select("#", ...)
+		if self ~= ev and (self ~= nil or n > 0) then
+			error(dotText, 2)
+		end
+		if phase ~= PHASE_READY then
+			eventsLost += 1
+			return
+		end
+		local ch = if unreliable then unr else rel
+		local seq = 0
+		if ordered then
+			seq = (sendSeq[id] + 1) % SEQ_MOD
+			sendSeq[id] = seq
+		end
+		if direct then
+			local fr = ch.open
+			local o = fr.n
+			local nm = fr.nmsg
+			if o + room <= fr.cap and (nm == 0 or (nm < msgCap and o + size <= fr.lim)) then
+				if n > arity then
+					error(argText(arity + 1, tooMany), 2)
+				end
+				local b = fr.buf
+				local p = o + pre
+				local st, arg = 0, 1
+				local exact = true
+				if one then
+					st = put(b, p + hdr, (...))
+				elseif many then
+					st, arg = putN(b, p + hdr, ...)
+				elseif dw then
+					dw.buf = b
+					dw.cap = fr.cap
+					dw.n = p + hdr
+					st = encodeFields(dw, prog, nil, ...)
+					arg = dw.errArg
+					dw.errArg = 0
+					exact = dw.n == o + size and dw.buf == b
+				end
+				if st ~= 0 then
+					error(argText(arg, st), 2)
+				end
+				if exact then
+					if unsent >= unsentCap or not take(routeBucket[id], 1, clock()) then
+						loseEvent(route)
+						return
+					end
+					if pre == 1 then
+						buffer.writeu8(b, o, msgLen)
+					else
+						buffer.writeu16(b, o, pre2)
+					end
+					if headLen == 1 then
+						buffer.writeu8(b, p, id)
+					elseif headLen == 2 then
+						buffer.writeu16(b, p, head2)
+					else
+						buffer.writeu8(b, p, 0xEF)
+						buffer.writeu16(b, p + 1, id)
+					end
+					if ordered then
+						buffer.writeu16(b, p + headLen, seq)
+					end
+					fr.n = o + size
+					fr.nmsg = nm + 1
+					fr.events += 1
+					unsent += 1
+					return
+				end
+			end
+		end
+		local sw = w
+		if encoding or sw.cap > SCRATCH_KEEP then
+			resetScratch()
+		end
+		sw.n = hdr
+		sw.inlineNodes = 0
+		sw.unreliable = unreliable
+		if sidecar then
+			sw.refBase = ch.open.nrefs
+		end
+		local b = sw.buf
+		if headLen == 1 then
+			buffer.writeu8(b, 0, id)
+		elseif headLen == 2 then
+			buffer.writeu16(b, 0, head2)
+		else
+			buffer.writeu8(b, 0, 0xEF)
+			buffer.writeu16(b, 1, id)
+		end
+		if ordered then
+			buffer.writeu16(b, headLen, seq)
+		end
+		local st = 0
+		encoding = true
+		if not typed then
+			st = writeArgs(sw, maxArgs, n, ...)
+		elseif n > arity then
+			sw.errArg = arity + 1
+			st = tooMany
+		else
+			st = encodeFields(sw, prog, nil, ...)
+		end
+		if st ~= ENCODE_OK then
+			local arg = sw.errArg
+			resetScratch()
+			error(argText(arg, st), 2)
+		end
+		if sw.lossy > 0 then
+			warnLossy(route)
+			sw.lossy = 0
+		end
+		encoding = false
+		local len, nrefs = sw.n, sw.nrefs
+		if nrefs == 0 then
+			if unreliable then
+				if HEADER + varintSize(len) + len > UNRELIABLE_SEAL then
+					resetScratch()
+					error(sizeText(len, 0, 0, 0), 2)
+				end
+			elseif len > C2S_MAX_MESSAGE then
+				resetScratch()
+				error(sizeText(len, 0, 0, 0), 2)
+			end
+			if coalesce then
+				local buf = coBuf[id]
+				local cap = coCap[id]
+				if cap < len then
+					cap = math.max(64, 2 * cap)
+					while cap < len do
+						cap *= 2
+					end
+					buf = buffer.create(cap)
+					coBuf[id] = buf
+					coCap[id] = cap
+				end
+				buffer.copy(buf, 0, sw.buf, 0, len)
+				coLen[id] = len
+				return
+			end
+			if unsent >= unsentCap or not take(routeBucket[id], 1, clock()) then
+				loseEvent(route)
+				return
+			end
+			local fr = ch.open
+			local nm = fr.nmsg
+			if nm ~= 0 and (nm >= msgCap or fr.n + varintSize(len) + len > fr.lim) then
+				seal(ch)
+				fr = ch.open
+			end
+			local p = fr.n
+			local need = p + 3 + len
+			if need > fr.cap then
+				growFrame(fr, need)
+			end
+			local fb = fr.buf
+			if len < 0x80 then
+				buffer.writeu8(fb, p, len)
+				p += 1
+			else
+				p = putVarint(fb, p, len)
+			end
+			buffer.copy(fb, p, sw.buf, 0, len)
+			fr.n = p + len
+			fr.nmsg += 1
+			fr.events += 1
+			unsent += 1
+			return
+		end
+		local nodes, side = sw.nodes, sw.sideBytes
+		local problem = sizeText(len, nrefs, nodes, side)
+		if problem then
+			resetScratch()
+			error(problem, 2)
+		end
+		if unsent >= unsentCap or not take(routeBucket[id], 1, clock()) then
+			resetScratch()
+			loseEvent(route)
+			return
+		end
+		if needsSeal(ch, len, nrefs, nodes, side) then
+			seal(ch)
+			st = encodeMessage(route, 0, seq, n, ...)
+			if st ~= ENCODE_OK then
+				resetScratch()
+				loseEvent(route)
+				return
+			end
+			len, nrefs, nodes, side = sw.n, sw.nrefs, sw.nodes, sw.sideBytes
+		end
+		commit(ch, sw.buf, len, sw.refs, nrefs, nodes, side, 0, true)
+		resetScratch()
+	end
+	return fire
+end
+
 -- Loren.Flush on the client: one flush if the credit allows, else the next Heartbeat sends.
 function ClientNet.flush(): ()
 	if phase ~= PHASE_READY then
@@ -1946,7 +2229,7 @@ function ClientNet.fail(): ()
 		ch.qtail = 0
 		local fr = ch.open
 		if fr.nmsg > 0 then
-			ch.open = takeFrame()
+			ch.open = takeFrame(ch.unreliable)
 			recycle(fr, false)
 		end
 	end
@@ -2007,6 +2290,7 @@ function ClientNet._reset(): ()
 	coList = {}
 	warnedLossy = {}
 	warnedLost = {}
+	sealC2S = Limit.C2S_SEAL
 	rel = newChannel(false)
 	unr = newChannel(true)
 	byteBucket = emptyBucket()
@@ -2018,9 +2302,11 @@ function ClientNet._reset(): ()
 	acc = 0
 	inlineTables = true
 	Codec.resetWriter(w)
+	w.inlineTables = true
+	encoding = false
 	Codec.beginFrame(ctx, nil, 0)
 	table.clear(argv)
-	spare = nil -- a frame being received keeps its own batch, and parks it here when it ends
+	spare = nil
 	fillN = 0
 	table.clear(claimed)
 	table.clear(claimedList)
@@ -2098,17 +2384,32 @@ ClientNet._test = table.freeze({
 				bytes = byteBucket.tokens,
 				messages = msgBucket.tokens,
 			},
+			seal = sealC2S,
+			relLim = rel.open.lim,
+			unrLim = unr.open.lim,
+			relNodes = rel.open.nodes,
+			relSide = rel.open.sideBytes,
+			encoding = encoding,
 		}
 	end,
 	routeBucket = function(id: number): BucketT
 		return routeBucket[id]
 	end,
-	-- True when nothing of the last frame is held: no tape values or refs in the spare batch, no refs in the decoder.
+	scratch = function(): Writer
+		return w
+	end,
+	framePool = function(): { number }
+		local caps: { number } = table.create(framePoolN, 0)
+		for i = 1, framePoolN do
+			caps[i] = framePool[i].cap
+		end
+		return caps
+	end,
+	varintSize = varintSize,
 	tapeEmpty = function(): boolean
 		local b = spare
 		return ctx.refs == nil and (b == nil or (b.n == 0 and b.refs == nil and b.node == nil and next(b.tape) == nil))
 	end,
-	-- `high`: most tape slots used since the tape was made; `lastClear`: slots the last frame's clear touched.
 	tapeStats = function(): { high: number, lastClear: number }
 		local b = spare
 		return { high = if b then b.high else 0, lastClear = lastClear }

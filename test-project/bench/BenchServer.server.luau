@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- LorenBench server: boots every selected library between bracket probes, then runs the bench.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -46,10 +45,8 @@ if settings.problem then
 	return
 end
 
--- 1. The harness remotes (TestControl, TestReport).
 Coordinator.init()
 
--- 2. Libraries in a fixed order (BridgeNet2 first: nothing above yields), each between RunService probes A and B.
 local runtimes: { [string]: Plan.Runtime } = {}
 local adapters: { [string]: Plan.Adapter } = {}
 local brackets: { [string]: Runner.Brackets } = {}
@@ -59,7 +56,6 @@ for _, key in settings.runtimes do
 	local runtime: Plan.Runtime = require(Adapters:WaitForChild(MODULES[key])) :: any
 	runtimes[key] = runtime
 	if key == "bridgenet2" and #Players:GetPlayers() > 0 then
-		-- BridgeNet2 only tracks players who join after it loads, so AllPlayers would skip these.
 		local why = "players joined before BridgeNet2 loaded (use Test > Clients and Servers)"
 		bootErrors[key] = why
 		BenchFolder:SetAttribute("Boot_" .. key, why)
@@ -68,7 +64,6 @@ for _, key in settings.runtimes do
 	local window = Probe.window()
 	local hb, ps = Probe.bracket(window), Probe.bracket(window)
 	local hbd, psd = Probe.bracket(window), Probe.bracket(window)
-	-- Deferred probes outside the sync ones: they also time what the library task.defers (Loren's flush).
 	Probe.openDeferredA(hbd, RunService.Heartbeat)
 	Probe.openDeferredA(psd, RunService.PostSimulation)
 	Probe.openA(hb, RunService.Heartbeat)
@@ -96,7 +91,6 @@ for _, key in settings.runtimes do
 	end
 end
 
--- Server listeners for the C->S events (connected before any client fires) and passive probes on each remote.
 for lib, adapter in adapters do
 	for _, event in C2S_EVENTS do
 		if adapter.has(event) then
@@ -127,7 +121,6 @@ for _, name in { "HeartbeatTimeMs", "HeartbeatTime" } do
 	end
 end
 
--- 3. Connect-order self-test: bracket probes rely on FIFO or LIFO handler order.
 local order = Probe.connectOrder()
 local bootParts = {}
 for _, key in settings.runtimes do
@@ -146,10 +139,8 @@ if order == "mixed" then
 	Report.say("connect order is mixed: bracket metrics (recv, flush) are INVALID in this session")
 end
 
--- 4. Clients may boot now.
 BenchFolder:SetAttribute("Ready", true)
 
--- 5. Wait for the clients (same rules as the harness), then run.
 if Env.isRunMode then
 	Report.say("the bench needs clients: use Test > Clients and Servers (or Play)")
 	return

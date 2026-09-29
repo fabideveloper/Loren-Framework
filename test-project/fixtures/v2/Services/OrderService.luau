@@ -1,12 +1,5 @@
 --!strict
 
--- The server side of the order round (studio/Harness/OrderPlan.luau, specs/v2/*/Order.spec.luau)
--- and of the pre-HELLO outbox check. Handshake with every client:
---   client Order("ready", relSeq) -> once every player is ready: Ctl("arm", role, roles) to each
---   client holds its Hold calls, then Order("armed") -> once every player is armed: the steps run
---   (explicit Loren.Flush() between frames), the unreliable size probe, then
---   Ctl("done", exactBlobLen, controlBlobLen).
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -17,19 +10,19 @@ local C: any = require(ReplicatedStorage.LorenRuntime.Constants)
 local OrderPlan = require(ReplicatedStorage.LorenTest.Harness.OrderPlan)
 local T = Loren.T
 
-local FIXTURE_FOLDER = "OrderFixture" -- ReplicatedStorage.OrderFixture: R1, R2, R3 (replicated to everyone)
-local HIDDEN = "OrderHidden" -- ServerStorage.OrderHidden: never replicated
-local GUI = "OrderFixture" -- PlayerGui.OrderFixture: replicated to its player only
+local FIXTURE_FOLDER = "OrderFixture"
+local HIDDEN = "OrderHidden"
+local GUI = "OrderFixture"
 local TAG_MAX = 32
 local BLOB_MAX = 1000
-local BLOB_PROBE = 950 -- over the limit on purpose: its error names the message size
+local BLOB_PROBE = 950
 local BLOB_SENDS = 3
-local BLOB_CONTROL_ID = 8 -- 800 B messages: they tell an engine cap below 900 B from a Loren bug
+local BLOB_CONTROL_ID = 8
 local BLOB_CONTROL_LESS = 100
 local BLOB_OVER_ID = 9
-local NOTICE_OFFSET = 20000 -- NOTICE seqs far ahead of the client's reliable seq: no call or ring slot matches
+local NOTICE_OFFSET = 20000
 local DROP_OFFSET = 30000
-local ARM_WAIT = 20 -- seconds for every armed report once "arm" went out
+local ARM_WAIT = 20
 local LIST_MAX = 64
 
 local function weakKeys(): any
@@ -37,13 +30,13 @@ local function weakKeys(): any
 end
 
 local Probe = {
-	earlyArmed = false, -- the pre-HELLO fires run in the check scenario only (see LorenBurn)
+	earlyArmed = false,
 	early = weakKeys() :: { [Player]: { helloed: any, dropDelta: number?, error: string? } },
 	guiMissing = {} :: { string },
 	holds = 0,
 	started = false,
 	done = false,
-	players = {} :: { [string]: string }, -- player name -> role
+	players = {} :: { [string]: string },
 	errors = {} :: { string },
 	blob = nil :: { [string]: any }?,
 }
@@ -57,23 +50,21 @@ local OrderService: any = {
 		Hold = Loren.Method({ Timeout = 30 }),
 		Obj = Loren.Signal(T.string(TAG_MAX), T.optional(T.Instance()), T.string(TAG_MAX)),
 		Req = Loren.Signal(T.string(TAG_MAX), T.Instance(), T.string(TAG_MAX)),
-		Pos = Loren.Signal(T.u16), -- fixed size (the B9 S7/C6 fast paths)
+		Pos = Loren.Signal(T.u16),
 		Blob = Loren.Signal(T.u8, T.string(BLOB_MAX), { Unreliable = true }),
-		UEarly = Loren.Signal(T.string(TAG_MAX), { Unreliable = true }), -- unreliable members must be typed
+		UEarly = Loren.Signal(T.string(TAG_MAX), { Unreliable = true }),
 	},
 	Probe = Probe,
 	BlobSends = BLOB_SENDS,
 }
 
 local gates: { [Player]: { [string]: thread } } = weakKeys()
-local ready: { [Player]: number } = weakKeys() -- the client's reliable seq at "ready"
+local ready: { [Player]: number } = weakKeys()
 local armed: { [Player]: boolean } = weakKeys()
 local rolePlayer: { [string]: Player } = {}
 local roleList: { string } = {}
 local armSent = false
 local refs: { [string]: Instance } = {}
-
--- [[ Helpers ]]
 
 local function push(list: { string }, text: string)
 	if #list < LIST_MAX then
@@ -85,7 +76,6 @@ local function isPlayer(value: any): boolean
 	return typeof(value) == "Instance" and (value :: Instance):IsA("Player")
 end
 
--- The runtime's server outbox (test only): NOTICEs at chosen points of the round.
 local function outbox(): any
 	return require(ServerScriptService:WaitForChild("LorenServer"):WaitForChild("Outbox")) :: any
 end
@@ -99,8 +89,6 @@ local function fire(signal: string, method: string, ...: any)
 		push(Probe.errors, string.format("%s:%s failed: %s", signal, method, tostring(err)))
 	end
 end
-
--- [[ Instances ]]
 
 local function ensureInstances()
 	local folder = ReplicatedStorage:FindFirstChild(FIXTURE_FOLDER)
@@ -127,7 +115,7 @@ local function ensureInstances()
 	end
 	refs.hidden = hidden :: Instance
 	local orphan = Instance.new("Folder")
-	orphan.Name = "OrderOrphan" -- never parented: no client ever has it
+	orphan.Name = "OrderOrphan"
 	refs.orphan = orphan
 end
 
@@ -154,8 +142,6 @@ local function instanceFor(ref: string): Instance?
 	return refs[ref]
 end
 
--- [[ Pre-HELLO outbox: one reliable and one unreliable Fire to every player before its HELLO ]]
-
 local function sendEarly(player: Player)
 	if Probe.early[player] ~= nil then
 		return
@@ -175,8 +161,6 @@ local function sendEarly(player: Player)
 	end
 	task.spawn(ensureGui, player)
 end
-
--- [[ The round ]]
 
 local function release(player: Player, key: string, mode: string, tag: string)
 	local mine = gates[player]
@@ -248,7 +232,6 @@ local function runStep(step: OrderPlan.Step, noticeSeq: { [Player]: number }, dr
 	end
 end
 
--- The unreliable size limit: the probe's error names its size, so the exact-limit payload is known.
 local function blobRound()
 	local blob = OrderService.Signals.Blob
 	local record: { [string]: any } = { exactErrors = {} }
@@ -370,7 +353,7 @@ local function tryArm()
 		Probe.players[player.Name] = role
 	end
 	for _, role in roleList do
-		fire("Ctl", "Fire", rolePlayer[role], "arm", role, roleList) -- sent by the next Heartbeat flush
+		fire("Ctl", "Fire", rolePlayer[role], "arm", role, roleList)
 	end
 	task.spawn(function()
 		local members: { Player } = {}
@@ -403,10 +386,6 @@ local function onOrder(player: any, command: any, value: any)
 	end
 end
 
--- [[ Methods ]]
-
--- Parks until the round releases it: ("ok", tag) replies tag, ("err", tag) rejects with tag,
--- ("fire", tag) fires Seq(tag .. "s") to the caller first, then replies tag.
 function OrderService.Client:Hold(player: Player, key: any): any
 	if type(key) ~= "string" or #key == 0 or #key > 16 then
 		return Loren.Reject("OrderService.Hold: bad key")
@@ -430,16 +409,12 @@ function OrderService.Client:Hold(player: Player, key: any): any
 	return tag
 end
 
--- [[ Lifecycle ]]
-
 function OrderService:LorenIgnite()
 	ensureInstances()
 	self.ClientEvents.Order:Connect(onOrder)
 end
 
 function OrderService:LorenBurn()
-	-- Only when the check runs (its specs read the probe): the UnreliableEarly drop prints a Violations
-	-- summary 30 s after each join, which the stress/security/soak/compare runs would count as log spam.
 	local config = ReplicatedStorage:FindFirstChild("TestConfig")
 	local scenario = if config then config:GetAttribute("Scenario") else nil
 	scenario = if type(scenario) == "string" then string.lower(scenario) else nil
@@ -447,7 +422,6 @@ function OrderService:LorenBurn()
 		return
 	end
 	Probe.earlyArmed = true
-	-- Before Transport.open (boot step 10): no player can have sent HELLO yet.
 	for _, player in Players:GetPlayers() do
 		sendEarly(player)
 	end

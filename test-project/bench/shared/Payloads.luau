@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- Payload pools shared by every library: 64 pre-built frames per pool, fixed seeds, f32-exact values.
 local Payloads = {}
 
 export type Entity = {
@@ -111,7 +110,6 @@ local function frames(n: number, make: (i: number) -> any): { { any } }
 	return out
 end
 
--- Each pool has its own seed (SEED + index), so it is built on demand yet identical on every machine.
 local BUILDERS: { [string]: { index: number, build: (rng: Random) -> { { any } } } } = {
 	trues = {
 		index = 1,
@@ -362,7 +360,6 @@ local function countTrues(frame: { any }): number
 	return n
 end
 
--- The 64-frame pool of a payload, built on first use (never inside a timed loop).
 function Payloads.pool(def: Def): Pool
 	local cached = pools[def.pool]
 	if cached then
@@ -381,7 +378,6 @@ function Payloads.pool(def: Def): Pool
 	return pool
 end
 
--- Writes the sequence field of frame `index` (0-based) into its pooled tables; call it outside the timed loop.
 function Payloads.stamp(def: Def, frame: { any }, index: number)
 	local kind = def.kind
 	if kind == "id" or kind == "seq" then
@@ -395,7 +391,6 @@ function Payloads.stamp(def: Def, frame: { any }, index: number)
 	end
 end
 
--- Expected `true` count after `count` sender frames (bool payloads only).
 function Payloads.expectedTrues(def: Def, count: number): number
 	if def.kind ~= "bool" then
 		return 0
@@ -442,14 +437,12 @@ local function closePose(a: any, b: CFrame): boolean
 	if (cf.Position - b.Position).Magnitude > Payloads.POSE_STUDS then
 		return false
 	end
-	-- Angle of the relative rotation as atan2(sin, cos): stays exact near 0, where ToAxisAngle can give NaN.
 	local _, _, _, r00, r01, r02, r10, r11, r12, r20, r21, r22 = (b.Rotation:Inverse() * cf.Rotation):GetComponents()
 	local sin = math.sqrt((r21 - r12) ^ 2 + (r02 - r20) ^ 2 + (r10 - r01) ^ 2) / 2
 	local cos = (r00 + r11 + r22 - 1) / 2
 	return math.atan2(sin, cos) <= math.rad(Payloads.POSE_DEGREES)
 end
 
--- Checks the values captured from the first sender frame against the pool; returns (ok, reason).
 function Payloads.check(def: Def, captured: { any }): (boolean, string?)
 	local pool = Payloads.pool(def).frames
 	local kind = def.kind

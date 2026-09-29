@@ -1,5 +1,4 @@
 --!strict
--- Round 1.5 (design/loren-2.0/SIGNALS-RESEARCH.md O12): deliverIn1's one-listener path against the full walk (deliverIn).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Runtime = ReplicatedStorage.LorenRuntime
@@ -16,17 +15,16 @@ local BOOM = "OneListener.spec: a listener failed on purpose"
 type Push = (string) -> ()
 type Scenario = {
 	name: string,
-	server: boolean?, -- ServerEvents only (a failing client listener kills its runner; Delivery.spec covers that)
-	client: boolean?, -- ClientSignals only (Backlog)
+	server: boolean?,
+	client: boolean?,
 	backlog: number?,
 	setup: (sig: any, push: Push) -> (),
 	after: ((sig: any, push: Push, again: () -> ()) -> ())?,
-	want: { string }, -- the listener lines of the trail (lines without "=")
+	want: { string },
 }
 
 local function noop(...: any) end
 
--- The value a listener got: ClientSignals pass (value), ServerEvents (player, value)
 local function last(...: any): any
 	return (select(select("#", ...), ...))
 end
@@ -53,7 +51,6 @@ local function newSig(server: boolean, backlog: number?): any
 	return ClientSignal.new("One", "Sig", backlog or 0)
 end
 
--- msgs in order from pooled runners, as ClientNet's pass 2 and Transport's runner do (one = deliverIn1, else deliverIn)
 local function deliverAll(server: boolean, sig: any, one: boolean, push: Push)
 	local cur: any = { owner = 0, busy = true, pos = 1, node = nil, stop = 0 }
 	local function body(c: any, me: number)
@@ -117,7 +114,6 @@ local function listenerLines(trail: { string }): { string }
 	return out
 end
 
--- Connects a listener that records "name:value" and then runs `extra` (value, connection)
 local function listen(sig: any, push: Push, name: string, extra: ((string, any) -> ())?, once: boolean?): any
 	local conn: any = nil
 	local function fn(...: any)
@@ -265,8 +261,8 @@ local SCENARIOS: { Scenario } = {
 		client = true,
 		backlog = 8,
 		setup = function(sig: any, push: Push)
-			ClientSignal.deliver(sig, "x") -- buffered before the first Connect
-			listen(sig, push, "A") -- starts the deferred replay: draining until it ran
+			ClientSignal.deliver(sig, "x")
+			listen(sig, push, "A")
 		end,
 		after = function(_: any, _: Push, again: () -> ())
 			task.wait()
@@ -280,7 +276,7 @@ return function(t: any)
 	local describe, it, expect = t.describe, t.it, t.expect
 
 	t.beforeEach(function()
-		Loren.Testing.Reset({ Offline = true }) -- also reopens the Backlog window
+		Loren.Testing.Reset({ Offline = true })
 	end)
 	t.afterEach(function()
 		for key in gates do

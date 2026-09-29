@@ -1,5 +1,4 @@
 --!strict
--- B2 (design/loren-2.0/SIGNALS-PERF.md): one delivery runner per frame, listeners called directly, takeovers.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ScriptContext = game:GetService("ScriptContext")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -35,15 +34,13 @@ type Fire = { channel: string, player: any, frame: buffer, refs: { any }? }
 
 local function noop(...: any) end
 
--- Harness state (rebuilt by setup) -------------------------------------------------------------------
-
 local now = 1000
 local rt: any = nil
 local byName: { [string]: any } = {}
-local fires: { Fire } = {} -- S->C, captured from the outbox
-local c2s: { any } = {} -- C->S, captured from ClientNet
+local fires: { Fire } = {}
+local c2s: { any } = {}
 local gates: { [string]: thread } = {}
-local trail: { string } = {} -- server-side order (ClientEvent listeners, Note calls)
+local trail: { string } = {}
 local nextUid = 0
 local seqN = 0
 
@@ -52,7 +49,6 @@ local function gate(key: string): ...any
 	return coroutine.yield()
 end
 
--- Resumes a parked Gate call with ("ok", value) or ("err", message).
 local function open(key: string, ...: any)
 	local th = gates[key]
 	assert(th ~= nil, "no parked Gate call " .. key)
@@ -93,10 +89,9 @@ local function services(): any
 			return tag
 		end, Schema.method({ RateLimit = { 1, 1 } })),
 		member(E, "Ev"),
-		-- Unreliable members need typed Args (Routes.build); ordMsg encodes its one string.
 		member(E, "Ord", nil, Schema.event(T.string(32), { Unreliable = true, Ordered = true })),
 		member(S, "Late", nil, Schema.signal({ Backlog = 8 })),
-		member(S, "Need", nil, Schema.signal(T.string(32), T.Instance())), -- a nil Instance drops the message
+		member(S, "Need", nil, Schema.signal(T.string(32), T.Instance())),
 		member(S, "Other"),
 		member(S, "Sig"),
 	}
@@ -183,7 +178,6 @@ end
 
 local errorWatch: RBXScriptConnection? = nil
 
--- Collects the ScriptContext.Error messages that carry BOOM until stopWatch (afterEach stops it too).
 local function watchBoom(): { string }
 	local reported: { string } = {}
 	errorWatch = ScriptContext.Error:Connect(function(message: string)
@@ -202,7 +196,6 @@ local function stopWatch()
 	end
 end
 
--- Resets Log (full budget) and captures its warning lines.
 local function captureWarnings(): { string }
 	local lines: { string } = {}
 	Log._reset()
@@ -211,8 +204,6 @@ local function captureWarnings(): { string }
 	end)
 	return lines
 end
-
--- C->S ------------------------------------------------------------------------------------------------
 
 local function R(name: string): any
 	local r = byName[name]
@@ -226,7 +217,6 @@ local function writerBytes(w: any): buffer
 	return b
 end
 
--- seq:u16 nmsg:u16 nrefs:u8, then len:varint + message for each (messages here stay under 128 B).
 local function frameOf(msgs: { buffer }, nrefs: number?): buffer
 	local total = 5
 	for _, m in msgs do
@@ -256,7 +246,6 @@ local function callMsg(name: string, callId: number, ...: any): buffer
 	return writerBytes(w)
 end
 
--- A reliable, unordered ClientEvent message and its refs (frame-absolute: put it in a frame alone with refs).
 local function eventMsg(name: string, ...: any): (buffer, { any })
 	local r = R(name)
 	local w = Codec.newWriter(64, true)
@@ -269,7 +258,6 @@ local function ev(tag: string): buffer
 	return (eventMsg("Ev", tag))
 end
 
--- An Ordered (unreliable) ClientEvent message with its seq.
 local function ordMsg(seq: number, tag: string): buffer
 	local r = R("Ord")
 	local w = Codec.newWriter(64, true)
@@ -279,7 +267,6 @@ local function ordMsg(seq: number, tag: string): buffer
 	return writerBytes(w)
 end
 
--- A message whose head names a Signal route: a Route violation on the server.
 local function signalHead(name: string): buffer
 	local w = Codec.newWriter(8, true)
 	Codec.writeHead(w, R(name).id)
@@ -301,7 +288,6 @@ local function st(p: any): any
 	return Transport._test.state(p)
 end
 
--- Removes and returns the captured fires to `p`, in fire order.
 local function takeFires(p: any): { Fire }
 	local mine: { Fire }, keep: { Fire } = {}, {}
 	for _, f in fires do
@@ -338,9 +324,6 @@ local function argvClear(): boolean
 	return true
 end
 
--- ClientNet, fed the server's frames ----------------------------------------------------------------------
-
--- Flushes and feeds `p`'s frames to ClientNet; returns how many frames there were.
 local function toClient(p: any): number
 	flush()
 	local list = takeFires(p)
@@ -350,7 +333,6 @@ local function toClient(p: any): number
 	return #list
 end
 
--- As toClient, but `hidden` arrives nil (the engine sends nil for an Instance this client cannot see).
 local function toClientHiding(p: any, hidden: Instance): number
 	flush()
 	local list = takeFires(p)
@@ -380,7 +362,6 @@ local function toServer(p: any)
 	end
 end
 
--- HELLO for `p` (a player without one), then its first frame (MANIFEST) into a fresh ClientNet.
 local function connectClient(p: any)
 	ClientNet._test.setFire(function(unreliable: boolean, frame: buffer, refs: { any }?)
 		table.insert(c2s, { unreliable = unreliable, frame = frame, refs = refs })
@@ -442,23 +423,23 @@ return function(t: any)
 				table.insert(log, "2:" .. tag)
 				threads["2:" .. tag] = coroutine.running()
 				if tag == "z" then
-					task.wait() -- the frame's last listener call
+					task.wait()
 					table.insert(log, "2:z resumed")
 				end
 			end)
 			fireAll(p, { "a", "y", "b", "z" })
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "1:a", "2:a", "1:y", "2:y", "1:b", "2:b", "1:z", "2:z" })
-			expect(threads["2:a"]).toBe(threads["1:a"]) -- one runner for the frame...
+			expect(threads["2:a"]).toBe(threads["1:a"])
 			expect(threads["1:y"]).toBe(threads["1:a"])
-			expect(threads["2:y"]).never.toBe(threads["1:y"]) -- ...until a yield hands the rest to a fresh one
+			expect(threads["2:y"]).never.toBe(threads["1:y"])
 			expect(threads["2:z"]).toBe(threads["2:y"])
 			expect(threads["1:a"]).never.toBe(coroutine.running())
 			expect(ClientNet._test.tapeEmpty()).toBe(true)
 			waitFor(function(): boolean
 				return #log >= 10
 			end, 2)
-			frames(3) -- a resumed stale runner must deliver nothing more
+			frames(3)
 			expect(#log).toBe(10)
 			expect(count(log, "1:y resumed")).toBe(1)
 			expect(count(log, "2:z resumed")).toBe(1)
@@ -486,7 +467,7 @@ return function(t: any)
 			toClient(p)
 			expect(log).toEqual({ "1:a", "2:a", "1:boom", "2:boom", "1:b", "2:b" })
 			expect(failed).never.toBeNil()
-			expect(coroutine.status(failed :: thread)).toBe("dead") -- not swallowed: the engine reports it
+			expect(coroutine.status(failed :: thread)).toBe("dead")
 			waitFor(function(): boolean
 				return #reported > 0
 			end, 2)
@@ -543,7 +524,7 @@ return function(t: any)
 			sig:Connect(function(tag: any)
 				table.insert(log, "WL " .. tag)
 				if tag == "a" then
-					local got = sig:Wait() -- yields this runner; the rest of "a" goes on without it
+					local got = sig:Wait()
 					table.insert(log, "WL got " .. tostring(got))
 				end
 			end)
@@ -586,7 +567,7 @@ return function(t: any)
 			toServer(p)
 			fireAll(p, { "a", "reset" })
 			open("k", "ok", "K")
-			Outbox.notice(st(p), C.Notice.ShuttingDown, 0, 0) -- applied, it would set shuttingDown again
+			Outbox.notice(st(p), C.Notice.ShuttingDown, 0, 0)
 			fireAll(p, { "after" })
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "a", "reset" })
@@ -610,12 +591,12 @@ return function(t: any)
 				end
 			end)
 			sig:Connect(function(tag: any)
-				table.insert(log, "2:" .. tag) -- disconnected by the reset, so skipped for "reset" (as `fire` did)
+				table.insert(log, "2:" .. tag)
 			end)
 			fireAll(p, { "a", "reset", "after" })
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "1:a", "2:a", "1:reset" })
-			expect(ClientNet.getStats().MessagesIn).toBe(0) -- the reset zeroed it; nothing after it is counted
+			expect(ClientNet.getStats().MessagesIn).toBe(0)
 			expect(ClientNet._test.tapeEmpty()).toBe(true)
 			waitFor(function(): boolean
 				return #log >= 4
@@ -633,7 +614,7 @@ return function(t: any)
 					sig:Connect(function(v: any)
 						table.insert(log, "new:" .. v)
 					end)
-					task.wait() -- the rest of "c" goes on in a fresh runner, with the snapshot taken at "c"
+					task.wait()
 					table.insert(log, "1:c resumed")
 				end
 			end)
@@ -658,7 +639,7 @@ return function(t: any)
 			sig:Connect(function(tag: any)
 				table.insert(log, "WL " .. tag)
 				if tag == "a" then
-					local got = other:Wait() -- parks this runner until frame 2 delivers Other
+					local got = other:Wait()
 					table.insert(log, "WL got " .. tostring(got))
 				end
 			end)
@@ -669,7 +650,7 @@ return function(t: any)
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "WL a", "L a", "WL a2", "L a2" })
 			local S = rt.signals.S
-			S.Other:Fire(p, "x") -- frame 2 reuses frame 1's batch
+			S.Other:Fire(p, "x")
 			S.Sig:Fire(p, "b")
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "WL a", "L a", "WL a2", "L a2", "WL got x", "WL b", "L b" })
@@ -692,7 +673,7 @@ return function(t: any)
 			sig:Connect(function(tag: any)
 				table.insert(log, "2:" .. tag)
 				if tag == "y" then
-					error(BOOM, 0) -- in the runner that took over from listener 1
+					error(BOOM, 0)
 				end
 			end)
 			sig:Connect(function(tag: any)
@@ -738,10 +719,10 @@ return function(t: any)
 			expect(gates.g).never.toBeNil()
 			expect(gates.t).never.toBeNil()
 			fireAll(p, { "s1" })
-			open("g", "ok", "G") -- the handler yielded; its OK lands after s1
+			open("g", "ok", "G")
 			fireAll(p, { "s2" })
 			ClientNet.call(route("Echo"), false, 1, "E"):andThen(onOk, onErr)
-			toServer(p) -- answered at once, between s2 and s3
+			toServer(p)
 			fireAll(p, { "s3" })
 			open("t", "ok", "T")
 			fireAll(p, { "s4" })
@@ -777,7 +758,7 @@ return function(t: any)
 				if tag == "cancel" then
 					a:cancel()
 					b:cancel()
-					task.wait() -- and yields after cancelling
+					task.wait()
 					table.insert(log, "resumed")
 				end
 			end)
@@ -807,12 +788,11 @@ return function(t: any)
 				table.insert(log, tag)
 			end)
 			local lines = captureWarnings()
-			-- OK: the FrameDropped NOTICE over the call's frame rejects it first, so its OK names a freed id.
 			local seqA = ClientNet._test.state().relSeq
 			local a = ClientNet.call(route("Echo"), false, 1, "A")
 			a:catch(noop)
 			Outbox.notice(st(p), C.Notice.FrameDropped, seqA, 1)
-			toServer(p) -- Echo answers at once: its OK follows the NOTICE
+			toServer(p)
 			fireAll(p, { "x1" })
 			expect(toClient(p)).toBe(1)
 			local okA, messageA = a:await()
@@ -820,20 +800,18 @@ return function(t: any)
 			expect(tostring(messageA)).toContain("RateLimited")
 			expect(log).toEqual({})
 			expect(table.concat(lines, "\n")).toContain("OK for an unknown call id")
-			-- ERR, the same way
 			local seqB = ClientNet._test.state().relSeq
 			local b = ClientNet.call(route("Gate"), false, 1, "g")
 			b:catch(noop)
 			toServer(p)
 			Outbox.notice(st(p), C.Notice.FrameDropped, seqB, 1)
-			open("g", "err", "E") -- its ERR follows the NOTICE
+			open("g", "err", "E")
 			fireAll(p, { "x2" })
 			expect(toClient(p)).toBe(1)
 			local okB, messageB = b:await()
 			expect(okB).toBe(false)
 			expect(tostring(messageB)).toContain("RateLimited")
 			expect(log).toEqual({})
-			-- the next frame is delivered as usual
 			fireAll(p, { "x3" })
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "x3" })
@@ -845,14 +823,14 @@ return function(t: any)
 			local function capture(line: string)
 				table.insert(lines, line)
 			end
-			Calls._test.setNextId(900) -- the call gets id 901
+			Calls._test.setNextId(900)
 			local rejection: any = nil
 			ClientNet.call(route("Echo"), false, 1, "x"):catch(function(message: any)
 				rejection = message
-				Loren.Testing.Reset({ Offline = true }) -- the one-pass decoder still logged the abort after this
+				Loren.Testing.Reset({ Offline = true })
 				Log._test.setSink(noop, capture)
 			end)
-			local frame = buffer.create(4) -- OK 901 with an argument count and no argument: it cannot decode
+			local frame = buffer.create(4)
 			buffer.writeu8(frame, 0, OP.OK)
 			buffer.writeu16(frame, 1, 901)
 			buffer.writeu8(frame, 3, 1)
@@ -866,16 +844,16 @@ return function(t: any)
 		it("CallsRateLimited keeps a local RateLimited raised in the catch of a call a NOTICE dropped", function()
 			local p = client()
 			ClientNet._test.setClock(function(): number
-				return now -- the mirror never refills during the test
+				return now
 			end)
 			local seq = ClientNet._test.state().relSeq
 			local dropped = ClientNet.call(route("Gate"), false, 1, "d")
-			toServer(p) -- its frame goes out as `seq`; the server parks it
-			local first = ClientNet.call(route("Tight"), false, 1, "t1") -- takes Tight's one mirror token (unsent)
+			toServer(p)
+			local first = ClientNet.call(route("Tight"), false, 1, "t1")
 			expect(first:getStatus()).toBe("Started")
 			local retried: any = nil
 			dropped:catch(function()
-				retried = ClientNet.call(route("Tight"), false, 1, "t2") -- no token left: rejected here
+				retried = ClientNet.call(route("Tight"), false, 1, "t2")
 				retried:catch(noop)
 			end)
 			local base = ClientNet.getStats().CallsRateLimited
@@ -884,7 +862,6 @@ return function(t: any)
 			expect(dropped:getStatus()).toBe("Rejected")
 			expect(retried).never.toBeNil()
 			expect(retried:getStatus()).toBe("Rejected")
-			-- The dropped call and the local rejection in its catch (the one-pass decoder's `+=` lost the second).
 			expect(ClientNet.getStats().CallsRateLimited - base).toBe(2)
 		end)
 	end)
@@ -904,22 +881,22 @@ return function(t: any)
 			local S = rt.signals.S
 			S.Late:Fire(p, "1")
 			S.Late:Fire(p, "2")
-			S.Other:Fire(p, "x") -- its listener makes Late's first Connect
+			S.Other:Fire(p, "x")
 			S.Late:Fire(p, "3")
 			S.Late:Fire(p, "4")
 			expect(toClient(p)).toBe(1)
-			expect(got).toEqual({ "other x" }) -- never replayed inside the frame
+			expect(got).toEqual({ "other x" })
 			task.wait()
 			expect(got).toEqual({ "other x", "late 1", "late 2", "late 3", "late 4" })
 			S.Late:Fire(p, "5")
 			toClient(p)
-			expect(got[6]).toBe("late 5") -- after the replay: live
+			expect(got[6]).toBe("late 5")
 			expect(#got).toBe(6)
 		end)
 
 		it("a Backlog message in a run queues on the receiving thread (a throwing log sink: as before B2)", function()
 			local p, sig = client()
-			local late = route("Late").signal -- Backlog 8, never connected
+			local late = route("Late").signal
 			local log: { string } = {}
 			sig:Connect(function(tag: any)
 				table.insert(log, tag)
@@ -929,7 +906,7 @@ return function(t: any)
 			Log._reset()
 			Log._test.setSink(noop, function(line: string)
 				if string.find(line, "filled up", 1, true) then
-					error(failure, 0) -- the Backlog's first-drop warning
+					error(failure, 0)
 				end
 				table.insert(lines, line)
 			end)
@@ -938,11 +915,10 @@ return function(t: any)
 				S.Late:Fire(p, tostring(i))
 			end
 			S.Sig:Fire(p, "a")
-			S.Late:Fire(p, "9") -- the Backlog is full: the oldest drops and the warning throws
+			S.Late:Fire(p, "9")
 			S.Sig:Fire(p, "b")
 			local base = ClientNet.getStats()
 			expect(toClient(p)).toBe(1)
-			-- As the one-pass decoder: "9" counted, not queued; the frame ends there with one decode log.
 			expect(log).toEqual({ "a" })
 			local stats = ClientNet.getStats()
 			expect(stats.MessagesIn - base.MessagesIn).toBe(10)
@@ -973,13 +949,13 @@ return function(t: any)
 			local hid, vis = Instance.new("Folder"), Instance.new("Folder")
 			local S = rt.signals.S
 			S.Sig:Fire(p, "a")
-			S.Need:Fire(p, "n1", hid) -- arrives nil: dropped, and counted where it stands
+			S.Need:Fire(p, "n1", hid)
 			S.Sig:Fire(p, "b")
 			S.Need:Fire(p, "n2", vis)
 			S.Sig:Fire(p, "c")
 			expect(toClientHiding(p, hid)).toBe(1)
 			expect(log).toEqual({ "Sig a m1 l0", "Sig b m3 l1", "Need n2 m4 l1", "Sig c m5 l1" })
-			expect(ClientNet._test.tapeEmpty()).toBe(true) -- the frame's refs are let go too
+			expect(ClientNet._test.tapeEmpty()).toBe(true)
 			hid:Destroy()
 			vis:Destroy()
 		end)
@@ -1022,7 +998,7 @@ return function(t: any)
 			local len = buffer.len(good)
 			local bad = buffer.create(len + 1)
 			buffer.copy(bad, 0, good, 0, len)
-			buffer.writeu8(bad, len, 0xF7) -- a reserved control op after the last message
+			buffer.writeu8(bad, len, 0xF7)
 			ClientNet._test.receive(bad, list[1].refs)
 			expect(#order).toBe(3)
 			expect(order[1]).toBe("sig a")
@@ -1033,7 +1009,7 @@ return function(t: any)
 		it("a reply's call is looked up after the messages before it ran (a call made there is found)", function()
 			local p, sig = client()
 			local log: { string } = {}
-			Calls._test.setNextId(700) -- the next call gets id 701
+			Calls._test.setNextId(700)
 			sig:Connect(function(tag: any)
 				table.insert(log, "sig " .. tostring(tag))
 				if tag == "call" then
@@ -1043,7 +1019,7 @@ return function(t: any)
 				end
 			end)
 			rt.signals.S.Sig:Fire(p, "call")
-			expect(Outbox.sendOk(st(p), R("Echo"), 701, 1, "reply")).toBe(0) -- an OK for the id that call gets
+			expect(Outbox.sendOk(st(p), R("Echo"), 701, 1, "reply")).toBe(0)
 			rt.signals.S.Sig:Fire(p, "after")
 			expect(toClient(p)).toBe(1)
 			expect(log).toEqual({ "sig call", "ok reply", "sig after" })
@@ -1083,12 +1059,12 @@ return function(t: any)
 			expect(toClient(p)).toBe(1)
 			expect(got).toBe(1000)
 			expect(ClientNet._test.tapeEmpty()).toBe(true)
-			expect(ClientNet._test.tapeStats().high).toBe(4000) -- 1000 x [E_SIGNAL, signal, argc, arg]
+			expect(ClientNet._test.tapeStats().high).toBe(4000)
 			fireAll(p, { "y" })
 			expect(toClient(p)).toBe(1)
 			expect(got).toBe(1001)
 			local stats = ClientNet._test.tapeStats()
-			expect(stats.lastClear).toBe(4) -- its own 4 slots, not the array the burst grew
+			expect(stats.lastClear).toBe(4)
 			expect(stats.high).toBe(4000)
 			expect(ClientNet._test.tapeEmpty()).toBe(true)
 		end)
@@ -1099,7 +1075,7 @@ return function(t: any)
 			sig:Connect(function()
 				got += 1
 			end)
-			fireAll(p, table.create(4200, "x")) -- 16,800 slots
+			fireAll(p, table.create(4200, "x"))
 			expect(toClient(p)).toBe(1)
 			expect(got).toBe(4200)
 			expect(ClientNet._test.tapeStats().high).toBe(0)
@@ -1134,7 +1110,7 @@ return function(t: any)
 				yMsg,
 				callMsg("Note", 1, "c"),
 				ev("b"),
-				signalHead("Sig"), -- a Route violation: ends the frame
+				signalHead("Sig"),
 				ev("never"),
 			}, 1)
 			local violations = Violations.totals().violations
@@ -1150,7 +1126,7 @@ return function(t: any)
 			waitFor(function(): boolean
 				return #trail >= 8
 			end, 2)
-			frames(3) -- the resumed stale runner must not parse, count or record anything again
+			frames(3)
 			expect(trail).toEqual({ "1:a", "2:a", "1:y", "2:y", "call c", "1:b", "2:b", "1:y resumed" })
 			expect(st(p).viol.winViol[V_ROUTE]).toBe(1)
 			expect(Violations.totals().violations - violations).toBe(1)
@@ -1190,7 +1166,7 @@ return function(t: any)
 			Log._reset()
 			Log._test.setSink(noop, function(line: string)
 				if string.find(line, "listener failed", 1, true) then
-					error(BOOM, 0) -- the engine reports it; the frame goes on
+					error(BOOM, 0)
 				end
 			end)
 			local reported = watchBoom()
@@ -1249,7 +1225,7 @@ return function(t: any)
 			e:Connect(function(_: any, tag: any)
 				table.insert(trail, "2:" .. tostring(tag))
 				if tag == "y" then
-					task.wait() -- in the runner that took over from listener 1
+					task.wait()
 					table.insert(trail, "2:y resumed")
 				end
 			end)
@@ -1287,7 +1263,7 @@ return function(t: any)
 			local limited = Violations.totals().drops[C.Drop.RateLimited] or 0
 			local messages = Transport.getStats().MessagesIn
 			local frame = frameOf({ callMsg("Tight", 1, "t1"), ev("y"), callMsg("Tight", 2, "t2"), ev("b") })
-			Transport._test.frame(false, p, frame, nil) -- Tight allows one call: the second is RateLimited
+			Transport._test.frame(false, p, frame, nil)
 			expect(trail).toEqual({ "tight t1", "ev y", "ev b" })
 			expect((Violations.totals().drops[C.Drop.RateLimited] or 0) - limited).toBe(1)
 			expect(Transport.getStats().MessagesIn - messages).toBe(3)
@@ -1298,7 +1274,6 @@ return function(t: any)
 			expect(trail).toEqual({ "tight t1", "ev y", "ev b", "ev y resumed" })
 			expect((Violations.totals().drops[C.Drop.RateLimited] or 0) - limited).toBe(1)
 			expect(Transport.getStats().MessagesIn - messages).toBe(3)
-			-- One OK (call 1), then one ERR RateLimited (call 2), and nothing else.
 			flush()
 			local out = takeFires(p)
 			expect(#out).toBe(1)
@@ -1381,7 +1356,6 @@ return function(t: any)
 				table.insert(trail, "2:" .. tostring(tag))
 			end)
 			Transport._test.frame(false, p, frameOf({ ev("a"), ev("reset"), ev("after") }), nil)
-			-- The parse goes on in the reset state: "reset" counts in the zeroed stats, "after" is a Route violation.
 			expect(trail).toEqual({ "1:a", "2:a", "1:reset", "2:reset" })
 			expect(Transport.getStats().MessagesIn).toBe(1)
 			expect(Violations.totals().violations).toBe(1)
@@ -1400,10 +1374,9 @@ return function(t: any)
 			rt.events.S.Ev:Connect(function(_: any, tag: any)
 				if tag == "park" then
 					parked = coroutine.running()
-					coroutine.yield() -- parked for good (cancelled below)
+					coroutine.yield()
 				end
 			end)
-			-- "pad1" first, so the runner that parks has parsed the frame before reaching "park".
 			local function send()
 				local frame = frameOf({ ev("pad1"), ev("park"), ev("pad2") })
 				weak.frame = frame
@@ -1411,7 +1384,6 @@ return function(t: any)
 			end
 			send()
 			expect(parked).never.toBeNil()
-			-- Two collections of controls made after send(): the second cycle began with the frame unreachable.
 			local rounds = 0
 			local junk: { any } = {}
 			local deadline = os.clock() + 10
@@ -1505,7 +1477,7 @@ return function(t: any)
 			local after: { string } = {}
 			local function body(c: any, me: number)
 				parked = coroutine.running()
-				coroutine.yield() -- stops without moving the cursor: an internal fault
+				coroutine.yield()
 				table.insert(after, if c.owner == me then "still the owner" else "revoked")
 			end
 			expect(Signal.drive(body, cur)).toBe(false)

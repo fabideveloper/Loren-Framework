@@ -1,12 +1,10 @@
 --!strict
 --!optimize 2
 
--- The per-frame fire steps (the same for every library, they only see the adapter), the pass order and the ETA.
 local Payloads = require(script.Parent.Payloads)
 
 local Plan = {}
 
--- One library row: how the bench fires and listens. Every fire function is one closure around one library call.
 export type Adapter = {
 	lib: string,
 	has: (event: string) -> boolean,
@@ -14,14 +12,11 @@ export type Adapter = {
 	toAll: (event: string) -> ((any) -> ())?,
 	toServer: (event: string) -> ((any) -> ())?,
 	connect: (event: string, fn: (any, any) -> ()) -> boolean,
-	-- Server listeners get (value, player) instead of (player, value).
 	swapServerArgs: boolean?,
 }
 
--- How a library's server sends a payload: one FireAllClients ("all"), FireClient per player ("each"), or both.
 export type TxModel = "all" | "each" | "all+each" | "measured"
 
--- One networking library (Loren serves two rows).
 export type Runtime = {
 	key: string,
 	name: string,
@@ -40,12 +35,10 @@ export type ClientStep = (index: number) -> (number, number)
 
 local FRAMES = Payloads.FRAMES
 
--- Server events are fired from the server, client events from the clients.
 function Plan.supported(adapter: Adapter, def: Payloads.Def): boolean
 	return adapter.has(def.event)
 end
 
--- Server fire step, or nil when the library has no such event. Returns (API calls, seconds in the fire loop).
 function Plan.serverStep(adapter: Adapter, def: Payloads.Def): ServerStep?
 	local frames = Payloads.pool(def).frames
 	if def.mode == "all" then
@@ -95,7 +88,6 @@ function Plan.serverStep(adapter: Adapter, def: Payloads.Def): ServerStep?
 	return nil
 end
 
--- Client fire step, or nil when unsupported.
 function Plan.clientStep(adapter: Adapter, def: Payloads.Def): ClientStep?
 	local fire = adapter.toServer(def.event)
 	if fire == nil then
@@ -115,7 +107,6 @@ function Plan.clientStep(adapter: Adapter, def: Payloads.Def): ClientStep?
 	end
 end
 
--- Server remote calls per frame from the receivers' counts (rx per client) and the library's send model.
 function Plan.txCalls(model: TxModel, rx: { number }): number?
 	local total = 0
 	for _, v in rx do
@@ -132,7 +123,6 @@ function Plan.txCalls(model: TxModel, rx: { number }): number?
 	return 1 + total - n
 end
 
--- Pass r (1-based) is the list rotated by r - 1, so each library takes a different position each pass.
 function Plan.rotate(list: { string }, r: number): { string }
 	local n = #list
 	local out = table.create(n) :: { string }
@@ -142,12 +132,10 @@ function Plan.rotate(list: { string }, r: number): { string }
 	return out
 end
 
--- Rough seconds per run beyond the fire window: arm, one frame, drain, report and the 1 s gap.
 Plan.RUN_OVERHEAD = 1.6
 Plan.IDLE_SECONDS = 2
 Plan.GAP_SECONDS = 1
 
--- ETA in seconds; libsFor(payload) is how many rows can run that payload.
 function Plan.eta(
 	payloads: { string },
 	libsFor: (string) -> number,

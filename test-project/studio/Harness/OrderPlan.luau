@@ -1,34 +1,22 @@
 --!strict
 
--- The order round of the 2.0 check (specs/v2/{server,client}/Order.spec.luau).
--- fixtures/v2/Services/OrderService runs STEPS once every client is armed; each client works out
--- the exact reliable sequence its role must receive with `expected` and compares. Frame boundaries
--- are not checked, only the order of the whole stream.
--- Roles: the players sorted by Name get A, B, C, ... Steps naming an absent role are skipped
--- (a `set` just loses the absent roles), so the round runs with any number of clients.
-
 local OrderPlan = {}
 
 export type Step = {
-	-- fire | all | for | except (Seq/Obj/Req sends), ok | err | okFire (release a Hold call),
-	-- notice (NOTICE at this point of the frame) | drop (NOTICE at the end of the frame), flush | wait
 	op: string,
-	-- "Seq" (default, untyped), "Obj" (typed, optional Instance), "Req" (typed, required Instance) or
-	-- "Pos" (T.u16, fixed size: the tag is its decimal value, never with a ref)
 	sig: string?,
-	to: string?, -- one role
-	set: { string }?, -- several roles (for, except)
+	to: string?,
+	set: { string }?,
 	tag: string?,
-	ref: string?, -- Instance argument: "R1".."R3" (replicated), "gui:<role>" (that role's PlayerGui), "hidden", "orphan"
-	after: string?, -- the argument after the Instance
-	key: string?, -- the Hold call to release
-	count: number?, -- NOTICE FrameDropped count
+	ref: string?,
+	after: string?,
+	key: string?,
+	count: number?,
 }
 
 OrderPlan.ROLES = { "A", "B", "C", "D", "E", "F", "G", "H" }
 
 local STEPS: { Step } = {
-	-- Round 1, one frame: per-player sends around broadcasts, targeted sends, replies and NOTICEs.
 	{ op = "fire", to = "A", tag = "1.01" },
 	{ op = "all", tag = "1.02" },
 	{ op = "all", sig = "Pos", tag = "116" },
@@ -50,7 +38,6 @@ local STEPS: { Step } = {
 	{ op = "drop", to = "A", count = 3 },
 	{ op = "fire", to = "A", tag = "1.15" },
 	{ op = "flush" },
-	-- Round 2, the next frame of the same engine frame. okFire: the handler fires Seq, then replies.
 	{ op = "all", tag = "2.01" },
 	{ op = "fire", to = "B", tag = "2.02" },
 	{ op = "okFire", to = "A", key = "a2", tag = "2.03" },
@@ -63,7 +50,6 @@ local STEPS: { Step } = {
 	{ op = "fire", sig = "Pos", to = "C", tag = "209" },
 	{ op = "flush" },
 	{ op = "wait" },
-	-- Round 3, a later engine frame: the Instance sidecar, per player and broadcast, untyped and typed.
 	{ op = "fire", to = "A", tag = "3.01", ref = "R1", after = "x1" },
 	{ op = "all", tag = "3.02", ref = "R2", after = "x2" },
 	{ op = "fire", to = "A", tag = "3.03", ref = "R3", after = "x3" },
@@ -75,14 +61,12 @@ local STEPS: { Step } = {
 	{ op = "for", set = { "A", "C" }, tag = "3.09", ref = "R1", after = "x9" },
 	{ op = "ok", to = "B", key = "b2", tag = "3.10" },
 	{ op = "flush" },
-	-- Round 4, broadcasts only: no player has own traffic in this flush (B4's shared frame and refs).
 	{ op = "all", tag = "4.01", ref = "R1", after = "y1" },
 	{ op = "all", tag = "4.02", ref = "gui:B", after = "y2" },
 	{ op = "all", sig = "Req", tag = "4.03", ref = "gui:A", after = "y3" },
 	{ op = "all", tag = "4.04", ref = "hidden", after = "y4" },
 	{ op = "all", sig = "Pos", tag = "405" },
 	{ op = "flush" },
-	-- Round 5, only A has own traffic: A gets a merged frame, everyone else the broadcasts alone.
 	{ op = "all", tag = "5.01" },
 	{ op = "fire", to = "A", tag = "5.02" },
 	{ op = "all", tag = "5.03" },
@@ -98,7 +82,6 @@ local function refRole(ref: string?): string?
 	return if ref ~= nil and string.sub(ref, 1, 4) == "gui:" then string.sub(ref, 5) else nil
 end
 
--- The steps for the roles present (a step naming an absent role in `to` or `ref` is skipped).
 function OrderPlan.steps(roles: { string }): { Step }
 	local out: { Step } = {}
 	for _, step in STEPS do
@@ -121,7 +104,6 @@ function OrderPlan.steps(roles: { string }): { Step }
 	return out
 end
 
--- The Hold keys the player with `role` must hold before the round.
 function OrderPlan.keys(role: string, roles: { string }): { string }
 	local out: { string } = {}
 	for _, step in OrderPlan.steps(roles) do
@@ -132,7 +114,6 @@ function OrderPlan.keys(role: string, roles: { string }): { string }
 	return out
 end
 
--- What the player with `role` must decode for `ref`: its name, "gui" or "nil".
 function OrderPlan.refName(ref: string, role: string): string
 	local owner = refRole(ref)
 	if owner ~= nil then
@@ -140,10 +121,9 @@ function OrderPlan.refName(ref: string, role: string): string
 	elseif ref == "R1" or ref == "R2" or ref == "R3" then
 		return ref
 	end
-	return "nil" -- hidden (ServerStorage) and orphan (no parent) never replicate
+	return "nil"
 end
 
--- One received message as a line. drops/lost: the client's FramesDropped/SignalsDropped since the start.
 function OrderPlan.entry(kind: string, tag: string, ref: string?, after: string?, drops: number, lost: number): string
 	local text = kind .. " " .. tag
 	if ref ~= nil then
@@ -169,10 +149,6 @@ local function receives(step: Step, role: string): boolean
 	return false
 end
 
--- The exact reliable sequence the player with `role` must receive, in order.
--- A NOTICE is seen through the FramesDropped count of the entries after it: "notice" counts at once,
--- "drop" at the next flush (Outbox appends those runs at the end of the frame). A typed Req whose
--- Instance arrives nil is dropped by the client and counted in SignalsDropped instead.
 function OrderPlan.expected(role: string, roles: { string }): { string }
 	local out: { string } = {}
 	local drops, lost, pending = 0, 0, 0

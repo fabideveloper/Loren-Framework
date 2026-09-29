@@ -12,6 +12,14 @@ type PayloadCodec = Types.PayloadCodec
 type Writer = Types.Writer
 type ReadCtx = Types.ReadCtx
 
+export type SendPlan = {
+	count: number,
+	prog: any,
+	size: number,
+	put: ((b: buffer, o: number, v: any) -> number)?,
+	putN: ((b: buffer, o: number, ...any) -> (number, number))?,
+}
+
 -- One compiled field list. Arrays are indexed by field (1..count) and frozen after construction.
 type Prog = {
 	count: number,
@@ -32,12 +40,12 @@ type Prog = {
 	sub: { any },
 	sub2: { any }, -- MAP value Prog, ENUM name -> index, ENUMITEM Value -> EnumItem, INSTANCE root (or false)
 	anf: boolean, -- AllowNonFinite
-	fixed: number, -- > 0: every field is fixed-size and required, so the prog is one run of this many bytes
-	offs: { number }, -- fixed progs: the byte offset of each field in that run
-	keys: { any }, -- where field i goes in dst: its name (structs) or i
-	rng: { boolean }, -- integers: the bounds are narrower than the type's, so a hostile decode checks them
-	tpl: any, -- structs, trusted decode: the frozen template a new struct clones (B1), EMPTY or false (see buildProg)
-	htpl: any, -- the same for a hostile decode
+	fixed: number,
+	offs: { number },
+	keys: { any },
+	rng: { boolean },
+	tpl: any,
+	htpl: any,
 }
 
 local OP_BOOL = 1
@@ -80,7 +88,8 @@ local D_MISSING_INSTANCE = 43
 
 local REF_USED = 2 -- ReadCtx.refFlags bit1 (hostile): the sidecar slot was already referenced this frame
 local NESTED_PREALLOC = 64 -- hostile typed arrays of non-scalar elements: slots preallocated at most
-local EMPTY = table.freeze({}) -- a template of no fields: its clone is a new table exactly like {}
+local EMPTY = table.freeze({})
+local STRUCTS_RESERVE_MAX = 1048576
 
 local E_NEEDS_REF = 4
 local E_BAD_TYPE = 5
@@ -94,7 +103,7 @@ local E_TOO_MANY_VALUES = 12
 
 local F32_MAX = 3.4028234663852886e38
 local F64_MAX = 1.7976931348623157e308
-local F32_ABS = 0x7FFFFFFF -- f32 bits without the sign: 0 is zero, below F32_NORMAL subnormal, above F32_INF NaN
+local F32_ABS = 0x7FFFFFFF
 local F32_NORMAL = 0x00800000
 local F32_INF = 0x7F800000
 local U32_MAX = 4294967295
@@ -1214,7 +1223,6 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 			i += 1
 		end
 	end
-	-- One run over every field (none optional): the fast decoders read field i at offs[i] after one bounds check.
 	local fixed = 0
 	for f = 1, n do
 		if fsz[f] == 0 or opt[f] then
@@ -1224,7 +1232,6 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 		offs[f] = fixed
 		fixed += fsz[f]
 	end
-	-- B1: the clone keeps frozen v2's pairs order only if every field gets a value; else {} (EMPTY for fixedRun)
 	local tpl: any, htpl: any = false, false
 	if names then
 		local shape: { [string]: boolean } = {}
@@ -1234,7 +1241,7 @@ local function buildProg(descs: { Descriptor }, names: any, root: boolean, anf: 
 			if opt[f] or op == OP_ANY or (op == OP_INSTANCE and flags[f] == NILABLE) then
 				trusted, hostile = false, false
 			elseif op == OP_ENUM or op == OP_ENUMITEM or op == OP_INSTANCE then
-				trusted = false -- nil when unknown or missing; a hostile decode refuses those
+				trusted = false
 			end
 			shape[names[f]] = false
 		end
@@ -1307,6 +1314,215 @@ local function decodePass(ctx: ReadCtx, p: Prog, i: number, o: number): (number,
 end
 
 @native
+local function putBool(b: buffer, o: number, v: any): number
+	if v == true then
+		buffer.writeu8(b, o, 1)
+		return 0
+	elseif v == false then
+		buffer.writeu8(b, o, 0)
+		return 0
+	end
+	return if v == nil then E_MISSING else E_BAD_TYPE
+end
+
+@native
+local function fixedEnc(b: buffer, o: number, p: Prog, src: any, cnt: number, ...: any): (number, number)
+	local names, ops, offs, lo, hi = p.names, p.ops, p.offs, p.lo, p.hi
+	local n, size, anf = p.count, p.fixed, p.anf
+	local base = o
+	for e = 1, if cnt > 0 then cnt else 1 do
+		local t: any = src
+		if cnt >= 0 then
+			if cnt > 0 then
+				t = rawget(src, e)
+			end
+			if type(t) ~= "table" then
+				return (if t == nil then E_MISSING else E_BAD_TYPE), 0
+			end
+		end
+		for i = 1, n do
+			local v: any = if cnt < 0 then select(i, ...) else rawget(t, names[i])
+			local op = ops[i]
+			local at = base + offs[i]
+			local st = 0
+			if op == OP_BOOL then
+				if v == true then
+					buffer.writeu8(b, at, 1)
+				elseif v == false then
+					buffer.writeu8(b, at, 0)
+				else
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				end
+			elseif op <= OP_F64 then
+				if type(v) ~= "number" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				elseif op <= OP_I32 then
+					if not (v % 1 == 0 and v >= lo[i] and v <= hi[i]) then
+						st = if v >= -F64_MAX and v <= F64_MAX then E_RANGE else E_NONFINITE
+					elseif op == OP_U8 then
+						buffer.writeu8(b, at, v)
+					elseif op == OP_U16 then
+						buffer.writeu16(b, at, v)
+					elseif op == OP_U32 then
+						buffer.writeu32(b, at, v)
+					elseif op == OP_I8 then
+						buffer.writei8(b, at, v)
+					elseif op == OP_I16 then
+						buffer.writei16(b, at, v)
+					else
+						buffer.writei32(b, at, v)
+					end
+				elseif not (v >= lo[i] and v <= hi[i]) and (not anf or (v >= -F64_MAX and v <= F64_MAX)) then
+					st = if v >= -F64_MAX and v <= F64_MAX then E_RANGE else E_NONFINITE
+				elseif op == OP_F32 then
+					buffer.writef32(b, at, v)
+				else
+					buffer.writef64(b, at, v)
+				end
+			elseif op == OP_VECTOR3 then
+				if typeof(v) ~= "Vector3" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				else
+					local x, y, z = v.X, v.Y, v.Z
+					local mag = hi[i]
+					if
+						not anf
+						and not (
+							x >= -F64_MAX
+							and x <= F64_MAX
+							and y >= -F64_MAX
+							and y <= F64_MAX
+							and z >= -F64_MAX
+							and z <= F64_MAX
+						)
+					then
+						st = E_NONFINITE
+					elseif mag <= F64_MAX and not (v.Magnitude <= mag) then
+						st = E_RANGE
+					else
+						buffer.writef32(b, at, x)
+						buffer.writef32(b, at + 4, y)
+						buffer.writef32(b, at + 8, z)
+					end
+				end
+			elseif op == OP_VECTOR2 then
+				if typeof(v) ~= "Vector2" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				else
+					local x, y = v.X, v.Y
+					local mag = hi[i]
+					if not anf and not (x >= -F64_MAX and x <= F64_MAX and y >= -F64_MAX and y <= F64_MAX) then
+						st = E_NONFINITE
+					elseif mag <= F64_MAX and not (v.Magnitude <= mag) then
+						st = E_RANGE
+					else
+						buffer.writef32(b, at, x)
+						buffer.writef32(b, at + 4, y)
+					end
+				end
+			elseif op == OP_COLOR3 then
+				if typeof(v) ~= "Color3" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				else
+					local cr, cg, cb = v.R, v.G, v.B
+					if
+						not anf
+						and not (
+							cr >= -F64_MAX
+							and cr <= F64_MAX
+							and cg >= -F64_MAX
+							and cg <= F64_MAX
+							and cb >= -F64_MAX
+							and cb <= F64_MAX
+						)
+					then
+						st = E_NONFINITE
+					else
+						buffer.writef32(b, at, cr)
+						buffer.writef32(b, at + 4, cg)
+						buffer.writef32(b, at + 8, cb)
+					end
+				end
+			elseif op == OP_CFRAME then
+				if typeof(v) ~= "CFrame" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				else
+					local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = v:GetComponents()
+					if
+						not anf
+						and not (
+							x >= -F64_MAX
+							and x <= F64_MAX
+							and y >= -F64_MAX
+							and y <= F64_MAX
+							and z >= -F64_MAX
+							and z <= F64_MAX
+							and r00 >= -F64_MAX
+							and r00 <= F64_MAX
+							and r01 >= -F64_MAX
+							and r01 <= F64_MAX
+							and r02 >= -F64_MAX
+							and r02 <= F64_MAX
+							and r10 >= -F64_MAX
+							and r10 <= F64_MAX
+							and r11 >= -F64_MAX
+							and r11 <= F64_MAX
+							and r12 >= -F64_MAX
+							and r12 <= F64_MAX
+							and r20 >= -F64_MAX
+							and r20 <= F64_MAX
+							and r21 >= -F64_MAX
+							and r21 <= F64_MAX
+							and r22 >= -F64_MAX
+							and r22 <= F64_MAX
+						)
+					then
+						st = E_NONFINITE
+					else
+						buffer.writef32(b, at, x)
+						buffer.writef32(b, at + 4, y)
+						buffer.writef32(b, at + 8, z)
+						buffer.writef32(b, at + 12, r00)
+						buffer.writef32(b, at + 16, r01)
+						buffer.writef32(b, at + 20, r02)
+						buffer.writef32(b, at + 24, r10)
+						buffer.writef32(b, at + 28, r11)
+						buffer.writef32(b, at + 32, r12)
+						buffer.writef32(b, at + 36, r20)
+						buffer.writef32(b, at + 40, r21)
+						buffer.writef32(b, at + 44, r22)
+					end
+				end
+			elseif op == OP_ENUM then
+				if type(v) ~= "string" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				else
+					local index = p.sub2[i][v]
+					if index == nil then
+						st = E_RANGE
+					else
+						buffer.writeu8(b, at, index)
+					end
+				end
+			else
+				if typeof(v) ~= "EnumItem" then
+					st = if v == nil then E_MISSING else E_BAD_TYPE
+				elseif v.EnumType ~= p.sub[i] then
+					st = E_BAD_TYPE
+				else
+					buffer.writeu16(b, at, v.Value)
+				end
+			end
+			if st ~= 0 then
+				return st, i
+			end
+		end
+		base += size
+	end
+	return 0, 0
+end
+
+@native
 local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 	local names = p.names
 	local ops, opt, run = p.ops, p.opt, p.run
@@ -1349,7 +1565,7 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 			elseif type(v) ~= "number" then
 				st = if v == nil then E_MISSING else E_BAD_TYPE
 			elseif op <= OP_I32 then
-				if not (v % 1 == 0 and math.floor(v) == v and v >= p.lo[i] and v <= p.hi[i]) then
+				if not (v % 1 == 0 and v >= p.lo[i] and v <= p.hi[i]) then
 					st = if v >= -F64_MAX and v <= F64_MAX then E_RANGE else E_NONFINITE
 				elseif op == OP_U8 then
 					buffer.writeu8(b, off, v)
@@ -1432,6 +1648,7 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 					st = if v == nil then E_MISSING else E_BAD_TYPE
 				else
 					local x, y, z = v.X, v.Y, v.Z
+					local mag = p.hi[i]
 					if
 						not p.anf
 						and not (
@@ -1444,7 +1661,7 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 						)
 					then
 						st = E_NONFINITE
-					elseif p.hi[i] <= F64_MAX and not (v.Magnitude <= p.hi[i]) then
+					elseif mag <= F64_MAX and not (v.Magnitude <= mag) then
 						st = E_RANGE
 					else
 						buffer.writef32(b, off, x)
@@ -1458,9 +1675,10 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 					st = if v == nil then E_MISSING else E_BAD_TYPE
 				else
 					local x, y = v.X, v.Y
+					local mag = p.hi[i]
 					if not p.anf and not (x >= -F64_MAX and x <= F64_MAX and y >= -F64_MAX and y <= F64_MAX) then
 						st = E_NONFINITE
-					elseif p.hi[i] <= F64_MAX and not (v.Magnitude <= p.hi[i]) then
+					elseif mag <= F64_MAX and not (v.Magnitude <= mag) then
 						st = E_RANGE
 					else
 						buffer.writef32(b, off, x)
@@ -1620,7 +1838,7 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 								st = if x == nil then E_MISSING else E_BAD_TYPE
 								break
 							elseif eop <= OP_I32 then
-								if not (x % 1 == 0 and math.floor(x) == x and x >= elo and x <= ehi) then
+								if not (x % 1 == 0 and x >= elo and x <= ehi) then
 									st = if x >= -F64_MAX and x <= F64_MAX then E_RANGE else E_NONFINITE
 									break
 								end
@@ -1658,10 +1876,17 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 							end
 						end
 					else
-						for k = 1, cnt do
-							st = encodeFields(w, ep, nil, rawget(v, k))
-							if st ~= 0 then
-								break
+						local sp: any = if ep.ops[1] == OP_STRUCT and not ep.opt[1] then ep.sub[1] else false
+						local f = if sp then sp.fixed else 0
+						if cnt > 0 and f > 0 and cnt * f <= STRUCTS_RESERVE_MAX then
+							local so = Codec.reserve(w, cnt * f)
+							st = fixedEnc(w.buf, so, sp, v, cnt)
+						else
+							for k = 1, cnt do
+								st = encodeFields(w, ep, nil, rawget(v, k))
+								if st ~= 0 then
+									break
+								end
 							end
 						end
 					end
@@ -1671,7 +1896,14 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 			if type(v) ~= "table" then
 				st = if v == nil then E_MISSING else E_BAD_TYPE
 			else
-				st = encodeFields(w, p.sub[i], v)
+				local sp: Prog = p.sub[i]
+				local f = sp.fixed
+				if f > 0 then
+					local so = Codec.reserve(w, f)
+					st = fixedEnc(w.buf, so, sp, v, 0)
+				else
+					st = encodeFields(w, sp, v)
+				end
 			end
 		elseif op == OP_MAP then
 			if type(v) ~= "table" then
@@ -1718,7 +1950,6 @@ local function encodeFields(w: Writer, p: Prog, src: any, ...: any): number
 	return 0
 end
 
--- Fixed progs from o (bytes checked by the caller): the first element it doubts (decodeFields decides), or cnt + 1.
 @native
 local function fixedRun(
 	b: buffer,
@@ -1733,11 +1964,11 @@ local function fixedRun(
 	local keys, ops, offs, n, size = p.keys, p.ops, p.offs, p.count, p.fixed
 	local lo: any, hi: any, rng: any, anf = nil, nil, nil, false
 	if hostile then
-		lo, hi, rng, anf = p.lo, p.hi, p.rng, p.anf -- read once per call; the trusted side never needs them
+		lo, hi, rng, anf = p.lo, p.hi, p.rng, p.anf
 	end
 	local base = o + (k - 1) * size
 	for e = k, cnt do
-		local t = if tpl then table.clone(tpl) else dst -- tpl: element e of an array; false: one run into dst
+		local t = if tpl then table.clone(tpl) else dst
 		for i = 1, n do
 			local op = ops[i]
 			local at = base + offs[i]
@@ -1755,7 +1986,6 @@ local function fixedRun(
 				local mx = bit32.band(buffer.readu32(b, at), F32_ABS)
 				local my = bit32.band(buffer.readu32(b, at + 4), F32_ABS)
 				local mz = bit32.band(buffer.readu32(b, at + 8), F32_ABS)
-				-- subnormal or NaN: decodeFields builds it, as frozen v2 does, whatever the native code does with f32s
 				if
 					not (
 						(mx == 0 or (mx >= F32_NORMAL and mx <= F32_INF))
@@ -1803,7 +2033,6 @@ local function fixedRun(
 				end
 			elseif op <= OP_F64 then
 				v = if op == OP_F32 then buffer.readf32(b, at) else buffer.readf64(b, at)
-				-- out of range: a finite value fails, a non-finite one only without AllowNonFinite (as decodeFields)
 				if hostile and not (v >= lo[i] and v <= hi[i]) and (not anf or (v >= -F64_MAX and v <= F64_MAX)) then
 					return e
 				end
@@ -1877,7 +2106,7 @@ local function fixedRun(
 					return e
 				end
 				v = p.sub[i][x + 1]
-			else -- OP_ENUMITEM (a fixed prog holds no other op)
+			else
 				v = p.sub2[i][buffer.readu16(b, at)]
 				if v == nil and hostile then
 					return e
@@ -1893,7 +2122,7 @@ local function fixedRun(
 	return cnt + 1
 end
 
-local one: { any } = {} -- decodeFields' OP_STRUCT: where fixedRun puts the struct (read right after the call)
+local one: { any } = {}
 
 @native
 local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: Prog, dst: any): (number, any)
@@ -2213,7 +2442,7 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 						end
 					elseif eop <= OP_I32 then
 						local elo, ehi = ep.lo[1], ep.hi[1]
-						local check = hostile and ep.rng[1] -- a value read at its type's width is always inside its bounds
+						local check = hostile and ep.rng[1]
 						for k = 1, cnt do
 							local x = 0
 							if eop == OP_U8 then
@@ -2262,12 +2491,10 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 						end
 					end
 				elseif ep.ops[1] == OP_STRUCT and not ep.opt[1] then
-					-- one required struct per element: into a clone of its template, no element prog (O2)
 					local sp: Prog = ep.sub[1]
 					local tpl = if hostile then sp.htpl else sp.tpl
 					local f = sp.fixed
 					if f > 0 and cnt * f <= lim - o then
-						-- every element is in the buffer: one call per run of elements; decodeFields takes one it doubts
 						local k = fixedRun(b, o, hostile, sp, t, tpl, 1, cnt)
 						while k <= cnt do
 							local e = table.clone(tpl)
@@ -2328,7 +2555,6 @@ local function decodeFields(b: buffer, o: number, lim: number, ctx: ReadCtx, p: 
 			local sp: Prog = p.sub[i]
 			local tpl = if hostile then sp.htpl else sp.tpl
 			local f = sp.fixed
-			-- fixedRun fills a clone of its own (one[1]); a struct it doubts is decoded into a new one, as frozen v2 does
 			if f > 0 and o + f <= lim and fixedRun(b, o, hostile, sp, one, tpl, 1, 1) > 1 then
 				v = one[1]
 				o += f
@@ -2359,7 +2585,6 @@ end
 
 type Decode = (b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }) -> (number, number)
 
--- The route's decoder: the interpreter, or a fast path for its shape that hands anything it doubts to the interpreter.
 local function typedDecode(prog: Prog, count: number): Decode
 	local function interpret(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
 		missing = false
@@ -2374,7 +2599,6 @@ local function typedDecode(prog: Prog, count: number): Decode
 	end
 	local size = prog.fixed
 	if size > 0 then
-		-- every argument fixed-size and required (one scalar too): one bounds check, straight into argv (O1)
 		@native
 		local function fixedArgs(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
 			if o + size <= lim and fixedRun(b, o, ctx.hostile, prog, argv, false, 1, 1) > 1 then
@@ -2387,7 +2611,6 @@ local function typedDecode(prog: Prog, count: number): Decode
 	if count ~= 1 or prog.ops[1] ~= OP_STRUCT or prog.opt[1] then
 		return interpret
 	end
-	-- one required struct: its fields decode straight into a clone of the template, no root prog (O2)
 	local sp: Prog = prog.sub[1]
 	local tpl, htpl = sp.tpl, sp.htpl
 	local function struct(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
@@ -2398,7 +2621,7 @@ local function typedDecode(prog: Prog, count: number): Decode
 		if ctx.err == 0 then
 			argv[1] = t
 		else
-			ctx.errArg = 1 -- decodePass at the root
+			ctx.errArg = 1
 		end
 		if missing then
 			missing = false
@@ -2414,7 +2637,6 @@ local function typedDecode(prog: Prog, count: number): Decode
 	end
 	@native
 	local function fixedStruct(b: buffer, o: number, lim: number, ctx: ReadCtx, argv: { any }): (number, number)
-		-- as an array of one: argv[1] gets its clone only when every field is decoded
 		local hostile = ctx.hostile
 		if o + ssize <= lim and fixedRun(b, o, hostile, sp, argv, if hostile then htpl else tpl, 1, 1) > 1 then
 			return 1, o + ssize
@@ -2423,6 +2645,9 @@ local function typedDecode(prog: Prog, count: number): Decode
 	end
 	return fixedStruct
 end
+
+local progOf: { [any]: Prog } = setmetatable({}, { __mode = "k" }) :: any
+local planOf: { [any]: SendPlan } = setmetatable({}, { __mode = "k" }) :: any
 
 local function typedCodec(prog: Prog, count: number, refs: boolean, anf: boolean): PayloadCodec
 	local codec: PayloadCodec = {
@@ -2441,7 +2666,47 @@ local function typedCodec(prog: Prog, count: number, refs: boolean, anf: boolean
 		decode = typedDecode(prog, count),
 	}
 	table.freeze(codec :: any)
+	progOf[codec] = prog
 	return codec
+end
+
+local function buildPlan(prog: Prog): SendPlan
+	local count = prog.count
+	local size = 0
+	local put: any = nil
+	local putN: any = nil
+	if prog.fixed > 0 then
+		size = prog.fixed
+		@native
+		local function putArgs(b: buffer, o: number, ...: any): (number, number)
+			return fixedEnc(b, o, prog, nil, -1, ...)
+		end
+		putN = putArgs
+		if count == 1 then
+			if prog.ops[1] == OP_BOOL then
+				put = putBool
+			else
+				@native
+				local function putArg(b: buffer, o: number, v: any): number
+					local st = fixedEnc(b, o, prog, nil, -1, v)
+					return st
+				end
+				put = putArg
+			end
+		end
+	elseif count == 1 and prog.ops[1] == OP_STRUCT and not prog.opt[1] and (prog.sub[1] :: Prog).fixed > 0 then
+		local sp: Prog = prog.sub[1]
+		size = sp.fixed
+		@native
+		local function putStruct(b: buffer, o: number, v: any): number
+			local st = fixedEnc(b, o, sp, v, 0)
+			return st
+		end
+		put = putStruct
+	end
+	local plan: SendPlan = { count = count, prog = prog, size = size, put = put, putN = putN }
+	table.freeze(plan :: any)
+	return plan
 end
 
 local function untypedCodec(maxArgs: number, refs: boolean, anf: boolean): PayloadCodec
@@ -2744,7 +3009,6 @@ function Schema.compile(
 	return typedCodec(buildProg(list, false, true, anf), #list, refs and not unreliable, anf)
 end
 
--- Args that are exactly one required bool, integer, float or Vector3: that op (ClientNet reads it inline), else 0.
 function Schema.scalarOp(descs: { Descriptor }?): number
 	if descs == nil or #descs ~= 1 or not isDescriptor(descs[1]) then
 		return 0
@@ -2753,6 +3017,21 @@ function Schema.scalarOp(descs: { Descriptor }?): number
 	return if op <= OP_F64 or op == OP_VECTOR3 then op else 0
 end
 
+function Schema.plan(codec: PayloadCodec): SendPlan?
+	local plan = planOf[codec]
+	if plan ~= nil then
+		return plan
+	end
+	local prog = progOf[codec]
+	if prog == nil then
+		return nil
+	end
+	local built = buildPlan(prog)
+	planOf[codec] = built
+	return built
+end
+
+Schema.encodeFields = encodeFields
 Schema.writeDescriptor = writeDescriptor
 Schema.readDescriptor = readDescriptor
 
@@ -2762,11 +3041,11 @@ Schema._test = table.freeze({
 	f32Down = f32Down,
 	f32Up = f32Up,
 	describe = describe,
-	-- The root prog Schema.compile builds for typed Args (fixed, offs, keys, rng and each struct's tpl and htpl)
 	prog = function(descs: { Descriptor }, allowNonFinite: boolean?): any
 		return buildProg(descs, false, true, allowNonFinite == true)
 	end,
 	fixedRun = fixedRun,
+	fixedEnc = fixedEnc,
 	EMPTY = EMPTY,
 })
 

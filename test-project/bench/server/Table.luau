@@ -1,37 +1,29 @@
 --!strict
 --!optimize 2
 
--- Report formatting: result rows, BENCH_JSON lines, the SUMMARY and the caveats.
 local HttpService = game:GetService("HttpService")
 
 local Table = {}
 
 export type Run = {
 	frames: number,
-	-- Sender frames per second (S->C: server frames; C->S: client 60 Hz ticks, mean over clients).
 	rate: number,
 	sendMs: number,
 	flushMs: number,
-	-- C->S: idle library frame work taken out of flush per tick (frames beyond one per tick, above 60 FPS).
 	flushAdjMs: number?,
 	totalMs: number,
 	recvMs: number?,
 	recvApprox: boolean,
 	recvCoverage: number?,
-	-- Remote calls the sender makes per frame; derived = from the library's send model, not counted.
 	txCalls: number?,
 	txDerived: boolean,
-	-- Remote invocations each receiver gets per frame (a FireAllClients counts once per client).
 	rxCalls: number,
 	bytes: number,
 	bytesApprox: boolean,
-	-- Computed: bytes x rate / 1000 (per receiver for S->C, per client for C->S). Stats kbps reads 0 on loopback.
 	kbps: number,
-	-- The sender's Stats.DataSendKbps minus idle (after Roblox's compression); JSON only.
 	sendKbps: number,
 	cfps: number,
 	cfpsMax: number,
-	-- C->S: the lowest client tick rate (60 wanted); under 57 the run is INVALID.
 	tickHz: number?,
 	shbP50: number,
 	shbP95: number,
@@ -167,7 +159,6 @@ function Table.row(row: Row): string
 	})
 end
 
--- JSON-safe copy: NaN and inf become nil.
 local function clean(value: any): any
 	if type(value) == "number" then
 		if value ~= value or value == math.huge or value == -math.huge then
@@ -246,7 +237,6 @@ local METRICS: { Metric } = {
 		end,
 		higher = false,
 	},
-	-- Not ranked: KB/s (B/f times each run's frame rate) and sHBwork (engine-wide; whose work it counts is unproven).
 	{
 		label = "cFPS",
 		get = function(m: Run): number?
@@ -263,7 +253,6 @@ local METRICS: { Metric } = {
 	},
 }
 
--- SUMMARY lines for the rows of one payload.
 function Table.summary(payload: string, rows: { Row }): { string }
 	local lines = {}
 	local best: { [string]: { lib: string, value: number } } = {}

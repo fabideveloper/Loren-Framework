@@ -1,7 +1,6 @@
 --!strict
 --!optimize 2
 
--- ByteNet 0.4.6 (bench/libs/bytenet): packets in one namespace; it flushes itself on Heartbeat.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
@@ -18,7 +17,6 @@ local R: any = {
 	sizeOf = nil,
 }
 
--- Its Heartbeat sends the shared channel with one FireAllClients, then each player's own channel.
 function R.txModel(def: any): string
 	return if def.mode == "mixed" then "all+each" else "all"
 end
@@ -38,14 +36,12 @@ function R.remotes(): { Instance }
 	return out
 end
 
--- ByteNet calls server listeners with (value, player); the bench builds its listener in that order.
 local a: any = { lib = "bytenet", swapServerArgs = true }
 
 function a.has(event: string): boolean
 	return packets[event] ~= nil
 end
 
--- Wrapped in one closure, like every other adapter, so each fire costs the same bench overhead.
 function a.toPlayer(event: string): ((Player, any) -> ())?
 	local packet = packets[event]
 	if packet == nil then
@@ -57,7 +53,6 @@ function a.toPlayer(event: string): ((Player, any) -> ())?
 	end
 end
 
--- One shared buffer, one FireAllClients per channel per frame.
 function a.toAll(event: string): ((any) -> ())?
 	local packet = packets[event]
 	if packet == nil then
@@ -92,7 +87,6 @@ end
 function R.setup(): { [string]: any }
 	local B: any = require(ReplicatedStorage:WaitForChild("Bench"):WaitForChild("Libs"):WaitForChild("ByteNet")) :: any
 	if not IS_SERVER then
-		-- The client builds packet ids and struct field order from this StringValue.
 		ReplicatedStorage:WaitForChild("BytenetStorage"):WaitForChild(NAMESPACE)
 	end
 	local function entity(): any

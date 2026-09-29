@@ -394,7 +394,7 @@ C.DROP_KINDS = 13
 C.Limit = freeze({
 	VARINT_MAX = 2097151, -- 3-byte LEB128 max
 	VARINT_MAX_BYTES = 3,
-	C2S_SEAL = 16384, -- client seals a reliable frame before its weight (bytes + 8/node + sidecar strings) passes this
+	C2S_SEAL = 61440, -- client seals a reliable frame before its weight (bytes + 8/node + sidecar strings) passes this
 	C2S_MAX_MESSAGE = 65536, -- one message's weight (head + body + sidecar cost); larger = PayloadTooLarge
 	C2S_MAX_FRAME = 73728, -- server envelope bound, reliable (72 KiB)
 	S2C_SEAL = 65536, -- server seals a reliable frame; a larger message goes alone

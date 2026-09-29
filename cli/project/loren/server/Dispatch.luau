@@ -71,7 +71,7 @@ local forwardErrors = false
 
 local globalMw: { (...any) -> ...any } = {}
 local globalMwN = 0
-local mwState = { n = 0 } -- globalMwN for Transport's inline middleware probe (the same table for the module's lifetime)
+local mwState = { n = 0 }
 local errorHandlers: { ErrorHandler } = {}
 local nextToken = 0 -- never reset: a thread from before a reset can never match a new call
 local lastFinished = 0
@@ -104,7 +104,6 @@ Dispatch.QUEUE = QUEUE
 Dispatch.SERIAL = SERIAL
 Dispatch.BUSY = BUSY
 
--- mwState.n > 0: every ClientEvent goes through Dispatch.event (Transport reads it per message, never caches it).
 Dispatch.mwState = mwState
 
 -- Helpers ------------------------------------------------------------------------------------------
@@ -878,12 +877,11 @@ function Dispatch.accept(
 	end
 end
 
--- An accepted ClientEvent (argv as for accept). True: middleware took it; false: the caller runs the listeners.
+-- An accepted ClientEvent (after decode). argv as for accept.
 function Dispatch.event(ps: PlayerState, route: Route, argv: { any }, n: number): boolean
 	local mw: any, colon: boolean = nil, false
 	local module: any = route.module
 	if type(module) == "table" then
-		-- memberMiddleware is nil unless a Middleware table names this member (or a metatable may supply one).
 		local t: any = rawget(module, "Middleware")
 		if (t == nil and getmetatable(module) ~= nil) or (type(t) == "table" and rawget(t, route.member) ~= nil) then
 			mw, colon = memberMiddleware(route, false)

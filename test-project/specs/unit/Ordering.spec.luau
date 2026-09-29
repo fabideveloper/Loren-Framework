@@ -1,10 +1,4 @@
 --!strict
--- Safety net for the signal rework (design/loren-2.0/SIGNALS-PERF.md, step 1): per-player order,
--- joins and HELLO during broadcasts, the pre-HELLO outbox, the Instance sidecar, the unreliable size
--- limit, fixed-size routes (B9 S7/C6), the server's in-frame order (B2) and the client's delivery order.
--- The server's captured frames are decoded per player; the client tests feed those same frames
--- (MANIFEST first) into ClientNet. Order is compared per flush as one stream (streamTo), not per
--- RemoteEvent frame, so B4/B8 may split frames. The multi-client version is specs/v2/*/Order.spec.luau.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -39,16 +33,14 @@ type Fire = { channel: string, player: any, frame: buffer, refs: { any }? }
 
 local function noop(...: any) end
 
--- Harness state (rebuilt by setup) -------------------------------------------------------------------
-
 local now = 1000
 local rt: any = nil
 local byName: { [string]: any } = {}
-local fires: { Fire } = {} -- S->C, captured from the outbox
-local c2s: { any } = {} -- C->S, captured from ClientNet
+local fires: { Fire } = {}
+local c2s: { any } = {}
 local gates: { [string]: thread } = {}
-local events: { any } = {} -- UEv deliveries on the server
-local trail: { string } = {} -- server-side handler order (Ev listeners, Note calls)
+local events: { any } = {}
+local trail: { string } = {}
 local nextUid = 0
 local seqN = 0
 
@@ -57,7 +49,6 @@ local function gate(key: string): ...any
 	return coroutine.yield()
 end
 
--- Resumes a parked Gate call: ("ok", tag), ("err", tag) or ("fire", tag).
 local function open(key: string, ...: any)
 	local th = gates[key]
 	assert(th ~= nil, "no parked Gate call " .. key)
@@ -79,7 +70,6 @@ end
 local function services(): any
 	local M, E, S = K.Method, K.Event, K.Signal
 	local members: { any } = {
-		-- "ok" replies tag, "err" rejects with tag, "fire" fires Sig(tag .. "!") to the caller first.
 		member(M, "Gate", function(_: any, player: any, key: any): any
 			local mode, tag = gate(key)
 			if mode == "err" then
@@ -100,9 +90,9 @@ local function services(): any
 		member(E, "UEv", nil, Schema.event(T.string(1000), { Unreliable = true })),
 		member(S, "Need", nil, Schema.signal(T.string(32), T.Instance(), T.string(32))),
 		member(S, "Opt", nil, Schema.signal(T.string(32), T.optional(T.Instance()), T.string(32))),
-		member(S, "Pos", nil, Schema.signal(T.u16, T.Vector3)), -- fixed size (B9 S7/C6)
+		member(S, "Pos", nil, Schema.signal(T.u16, T.Vector3)),
 		member(S, "Sig"),
-		member(S, "UPos", nil, Schema.signal(T.u16, { Unreliable = true, Ordered = true })), -- fixed, Ordered
+		member(S, "UPos", nil, Schema.signal(T.u16, { Unreliable = true, Ordered = true })),
 		member(S, "USig", nil, Schema.signal(T.string(1000), { Unreliable = true })),
 	}
 	local client: { [string]: any } = {}
@@ -184,8 +174,6 @@ local function v(x: number): Vector3
 	return Vector3.new(x, 0, 0)
 end
 
--- C->S ------------------------------------------------------------------------------------------------
-
 local function R(name: string): any
 	local r = byName[name]
 	assert(r ~= nil, "no route " .. name)
@@ -198,7 +186,6 @@ local function writerBytes(w: any): buffer
 	return b
 end
 
--- seq:u16 nmsg:u16 nrefs:u8, then len:varint + message for each (messages here stay under 128 B).
 local function frameOf(msgs: { buffer }): buffer
 	local total = 5
 	for _, m in msgs do
@@ -228,7 +215,6 @@ local function callMsg(name: string, callId: number, ...: any): buffer
 	return writerBytes(w)
 end
 
--- A reliable, unordered ClientEvent message.
 local function eventMsg(name: string, ...: any): buffer
 	local r = R(name)
 	local w = Codec.newWriter(64, true)
@@ -237,7 +223,6 @@ local function eventMsg(name: string, ...: any): buffer
 	return writerBytes(w)
 end
 
--- A message whose head names a Signal route: a Route violation on the server.
 local function signalHead(name: string): buffer
 	local w = Codec.newWriter(8, true)
 	Codec.writeHead(w, R(name).id)
@@ -263,7 +248,6 @@ local function st(p: any): any
 	return Transport._test.state(p)
 end
 
--- Removes and returns the captured fires to `p` (optionally one channel), in fire order.
 local function takeFires(p: any, channel: string?): { Fire }
 	local mine: { Fire }, keep: { Fire } = {}, {}
 	for _, f in fires do
@@ -290,8 +274,6 @@ local function newPlayer(helloNow: boolean?): any
 	return p
 end
 
--- S->C decoding ------------------------------------------------------------------------------------------
-
 local function show(x: any): string
 	if typeof(x) == "Instance" then
 		return (x :: Instance).Name
@@ -310,8 +292,6 @@ local function joinArgs(argv: { any }, n: number): string
 	return table.concat(parts, " ")
 end
 
--- One S->C frame as lines: "MANIFEST", "OK id values", "ERR id code msg", "NOTICE kind first count",
--- "<Signal> args" or "<Signal> #seq args" (Ordered). Instances by Name, an Instance that arrived nil as nil.
 local function decode(frame: buffer, refs: { any }?): { string }
 	local ctx = Codec.newReadCtx(false, false)
 	Codec.beginFrame(ctx, refs, 0)
@@ -374,7 +354,6 @@ local function decode(frame: buffer, refs: { any }?): { string }
 	return out
 end
 
--- Everything fired to `p` on one channel since the last take, decoded and joined in fire order.
 local function channelStream(p: any, channel: string): { string }
 	local out: { string } = {}
 	for _, f in takeFires(p, channel) do
@@ -393,7 +372,6 @@ local function ustreamTo(p: any): { string }
 	return channelStream(p, "Unreliable")
 end
 
--- The refs of every reliable fire to `p`, joined in fire order.
 local function refsTo(p: any): ({ any }, { string })
 	local refs: { any }, lines: { string } = {}, {}
 	for _, f in takeFires(p, "Reliable") do
@@ -408,7 +386,6 @@ local function refsTo(p: any): ({ any }, { string })
 	return refs, lines
 end
 
--- Flushes, then each player's reliable and unreliable stream of that flush (same order as `players`).
 local function flushStreams(players: { any }): ({ { string } }, { { string } })
 	flush()
 	local rel: { { string } }, unr: { { string } } = {}, {}
@@ -433,8 +410,6 @@ local function folder(name: string): Folder
 	return f
 end
 
--- ClientNet, fed the server's frames ----------------------------------------------------------------------
-
 local function toClient(p: any)
 	for _, f in takeFires(p) do
 		ClientNet._test.receive(f.frame, f.refs, f.channel == "Unreliable")
@@ -450,7 +425,6 @@ local function toServer(p: any)
 	end
 end
 
--- HELLO for `p` (a player without one), then its first frame (MANIFEST) into a fresh ClientNet.
 local function connectClient(p: any)
 	ClientNet._test.setFire(function(unreliable: boolean, frame: buffer, refs: { any }?)
 		table.insert(c2s, { unreliable = unreliable, frame = frame, refs = refs })
@@ -487,16 +461,16 @@ return function(t: any)
 			call(p1, "Gate", 1, "a")
 			call(p2, "Gate", 2, "b")
 			flush()
-			expect(#fires).toBe(0) -- both calls are parked: nothing to send yet
+			expect(#fires).toBe(0)
 			local S = rt.signals.S
 			local sig, pos, upos = S.Sig, S.Pos, S.UPos
 			sig:Fire(p1, "1")
 			upos:Fire(p1, 1)
 			sig:FireAll("2")
-			pos:FireAll(20, v(1)) -- fixed size between two variable-size broadcasts
+			pos:FireAll(20, v(1))
 			upos:FireAll(2)
 			sig:FireAll("3")
-			sig:Fire(p1, "4") -- per-player, two broadcasts, per-player
+			sig:Fire(p1, "4")
 			pos:Fire(p1, 40, v(2))
 			sig:FireFor({ p1, p2 }, "5")
 			pos:FireFor({ p2, p3 }, 50, v(3))
@@ -504,14 +478,14 @@ return function(t: any)
 			open("a", "ok", "6")
 			sig:FireExcept(p1, "7")
 			upos:FireExcept(p1, 4)
-			Outbox.notice(st(p3), FRAME_DROPPED, 100, 5) -- a NOTICE at this point of p3's frame
+			Outbox.notice(st(p3), FRAME_DROPPED, 100, 5)
 			sig:FireAll("8")
 			pos:FireExcept({ p2 }, 80, v(4))
 			open("b", "err", "9")
 			sig:FireExcept({ p2, p3 }, "10")
-			call(p3, "Echo", 3, "11") -- answered at once
+			call(p3, "Echo", 3, "11")
 			sig:FireAll("12")
-			Outbox.recordDrop(st(p1), false, 200) -- a FrameDropped run: its NOTICE ends the flush
+			Outbox.recordDrop(st(p1), false, 200)
 			sig:Fire(p1, "13")
 			local rel, unr = flushStreams({ p1, p2, p3 })
 			expect(rel[1]).toEqual({
@@ -553,7 +527,6 @@ return function(t: any)
 				"OK 3 11",
 				"Sig 12",
 			})
-			-- Ordered unreliable: one seq per route and Fire, each player's order kept.
 			expect(unr[1]).toEqual({ "UPos #1 1", "UPos #2 2" })
 			expect(unr[2]).toEqual({ "UPos #2 2", "UPos #3 3", "UPos #4 4" })
 			expect(unr[3]).toEqual({ "UPos #2 2", "UPos #3 3", "UPos #4 4" })
@@ -580,7 +553,7 @@ return function(t: any)
 			pos:FireFor({ p1 }, 66, v(6))
 			sig:Fire(p1, "7")
 			local rel2, unr2 = flushStreams(players)
-			local rel3, unr3 = flushStreams(players) -- nothing new: no fire at all
+			local rel3, unr3 = flushStreams(players)
 			expect(#fires).toBe(0)
 			sig:FireExcept(p3, "8")
 			pos:FireExcept(p1, 88, v(8))
@@ -613,10 +586,10 @@ return function(t: any)
 		it("a reply never overtakes a signal fired before it in the same flush", function()
 			local p, other = newPlayer(), newPlayer()
 			local sig = rt.signals.S.Sig
-			call(p, "Gate", 1, "g1") -- received first, answered later
+			call(p, "Gate", 1, "g1")
 			sig:Fire(p, "before")
 			call(p, "Echo", 2, "sync")
-			open("g1", "fire", "x") -- the handler fires x!, then returns
+			open("g1", "fire", "x")
 			sig:Fire(p, "after")
 			flush()
 			expect(streamTo(p)).toEqual({ "Sig before", "OK 2 sync", "Sig x!", "OK 1 x", "Sig after" })
@@ -671,8 +644,8 @@ return function(t: any)
 				S.UPos:Fire(p1, 1.5)
 			end).toThrow("arg 1")
 			expect(snapshot()).toEqual(before)
-			call(p2, "Echo", 2, "ok") -- sendOk to another player right after the failures
-			open("g", "err", "no") -- and a sendErr
+			call(p2, "Echo", 2, "ok")
+			open("g", "err", "no")
 			expect(snapshot()).toEqual(before)
 			S.Pos:Fire(p1, 3, v(3))
 			flush()
@@ -690,12 +663,12 @@ return function(t: any)
 			local p1 = newPlayer()
 			local S = rt.signals.S
 			local sig, usig, pos, upos = S.Sig, S.USig, S.Pos, S.UPos
-			sig:FireAll("b1") -- before the join: never for p2
-			local p2 = newPlayer(false) -- joined (PlayerAdded), no HELLO yet
+			sig:FireAll("b1")
+			local p2 = newPlayer(false)
 			local dropped = Transport.getStats().SignalsDropped
 			sig:FireAll("b2")
-			pos:FireAll(2, v(2)) -- fixed size into the pre-HELLO outbox
-			usig:FireAll("u2") -- unreliable before HELLO: dropped and counted
+			pos:FireAll(2, v(2))
+			usig:FireAll("u2")
 			upos:FireAll(1)
 			sig:Fire(p2, "own3")
 			usig:Fire(p2, "uown")
@@ -704,11 +677,11 @@ return function(t: any)
 			expect(st(p2).viol.winDrop[C.Drop.UnreliableEarly]).toBe(3)
 			expect(Transport.getStats().SignalsDropped - dropped).toBe(3)
 			flush()
-			expect(#takeFires(p2)).toBe(0) -- the outbox waits for HELLO
+			expect(#takeFires(p2)).toBe(0)
 			local p1First = streamTo(p1)
 			local p1FirstU = ustreamTo(p1)
 			sig:FireAll("b5")
-			hello(p2) -- between two broadcasts of one flush
+			hello(p2)
 			sig:FireAll("b6")
 			pos:FireAll(6, v(6))
 			sig:Fire(p2, "own7")
@@ -723,7 +696,7 @@ return function(t: any)
 				"Pos 6 <6,0,0>",
 				"Sig own7",
 			})
-			expect(#takeFires(p2)).toBe(0) -- nothing unreliable
+			expect(#takeFires(p2)).toBe(0)
 			expect(p1First).toEqual({ "Sig b1", "Sig b2", "Pos 2 <2,0,0>", "Sig x4", "Sig f5" })
 			expect(p1FirstU).toEqual({ "USig u2", "UPos #1 1" })
 			expect(streamTo(p1)).toEqual({ "Sig b5", "Sig b6", "Pos 6 <6,0,0>" })
@@ -748,7 +721,7 @@ return function(t: any)
 		it("a repeat HELLO mid-flush: MANIFEST first, replies purged, signals and later broadcasts kept", function()
 			local p1, p2 = newPlayer(), newPlayer()
 			local S = rt.signals.S
-			call(p1, "Echo", 1, "stale") -- a reply for the old session
+			call(p1, "Echo", 1, "stale")
 			S.Sig:FireAll("r1")
 			S.Pos:Fire(p1, 1, v(1))
 			now += LIM.REHELLO_MIN + 1
@@ -769,7 +742,7 @@ return function(t: any)
 			local i = { folder("I1"), folder("I2"), folder("I3"), folder("I4"), folder("I5") }
 			sig:Fire(p1, "a", i[1])
 			sig:FireAll("b", i[2])
-			S.Pos:FireAll(7, v(7)) -- no refs between messages with refs
+			S.Pos:FireAll(7, v(7))
 			sig:Fire(p1, "c", i[3])
 			sig:FireFor({ p2, p3 }, "d", i[4])
 			sig:FireExcept(p2, "e", i[5])
@@ -798,11 +771,11 @@ return function(t: any)
 			end
 			local vis, hid = folder("Vis"), folder("Hid")
 			local S = rt.signals.S
-			S.Sig:Fire(p, "a", hid, "a2") -- per player, untyped
-			S.Sig:FireAll("b", hid, "b2") -- broadcast, untyped
-			S.Opt:Fire(p, "c", hid, "c2") -- typed optional: nil in place
-			S.Need:FireAll("d", hid, "d2") -- typed required: dropped and counted
-			S.Pos:Fire(p, 5, v(5)) -- no refs: the cursor must not move
+			S.Sig:Fire(p, "a", hid, "a2")
+			S.Sig:FireAll("b", hid, "b2")
+			S.Opt:Fire(p, "c", hid, "c2")
+			S.Need:FireAll("d", hid, "d2")
+			S.Pos:Fire(p, 5, v(5))
 			S.Sig:Fire(p, "e", vis, "e2")
 			S.Need:Fire(p, "f", vis, "f2")
 			S.Opt:FireAll("g", vis, "g2")
@@ -812,7 +785,7 @@ return function(t: any)
 			local all: { any } = {}
 			for _, f in list do
 				local refs: { any } = f.refs or {}
-				local seen: { any } = table.create(#refs) -- the engine sends nil for an Instance this client cannot see
+				local seen: { any } = table.create(#refs)
 				for k, ref in refs do
 					table.insert(all, ref)
 					if ref ~= hid then
@@ -833,7 +806,7 @@ return function(t: any)
 			})
 			expect(ClientNet.getStats().SignalsDropped).toBe(1)
 			local theirs = refsTo(other)
-			expect(theirs).toEqual({ hid, hid, vis }) -- only its broadcasts
+			expect(theirs).toEqual({ hid, hid, vis })
 		end)
 	end)
 
@@ -871,7 +844,6 @@ return function(t: any)
 			expect(buffer.len(u[1].frame)).toBe(SEAL)
 			expect(#takeFires(p2)).toBe(0)
 
-			-- Per-player and broadcast unreliable messages: chunks of at most 900 B, each player's order kept.
 			for k = 1, 6 do
 				usig:Fire(p1, string.format("p%d.", k) .. string.rep("x", 296))
 				usig:FireAll(string.format("a%d.", k) .. string.rep("y", 296))
@@ -997,7 +969,7 @@ return function(t: any)
 			S.Pos:FireAll(2, v(2))
 			S.Sig:FireAll("s2")
 			open("b", "err", "B")
-			Outbox.notice(st(p), FRAME_DROPPED, 40000, 2) -- seqs no call of this client was sent in
+			Outbox.notice(st(p), FRAME_DROPPED, 40000, 2)
 			S.Sig:Fire(p, "s3")
 			open("c", "fire", "C")
 			S.Pos:Fire(p, 4, v(4))
@@ -1053,7 +1025,7 @@ return function(t: any)
 			waitFor(function(): boolean
 				return #order >= 5
 			end, 2)
-			frames(3) -- a stale runner that resumes must not deliver anything a second time
+			frames(3)
 			expect(order).toEqual({ "start y", "start boom", "start cancel", "start z", "resumed y" })
 			expect(resolved).toBe(false)
 			expect(ClientNet.getStats().LateReplies).toBe(1)

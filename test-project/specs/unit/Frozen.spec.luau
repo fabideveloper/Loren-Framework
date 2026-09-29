@@ -1,11 +1,4 @@
 --!strict
--- Differential check: the runtime's Schema/Codec interpreter against the frozen v2 copy (specs/frozen/v2,
--- ServerStorage.LorenTest.Frozen.v2), before B1/B9 touch Schema and Codec (SIGNALS-PERF step 1).
--- Each side builds its codecs with its own T. For every case, both directions (S->C trusted, C->S hostile)
--- must agree on: encode status, errArg, bytes, sidecar refs, lossy and the C->S cost counters; decode status,
--- errArg, count, cursor, ref cursor, sidecar walk and flags, and the decoded values. Decodes cover the valid
--- bytes, hidden Instances (S->C), every early cut, single-byte mutations and random bytes. Until PROTO 3
--- (B6) nothing may differ; after it, the frozen v3 copy takes over (a new folder, never an edit here).
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -16,10 +9,10 @@ type Side = { name: string, C: any, Codec: any, Schema: any }
 type Args = { n: number, [number]: any }
 type Case = {
 	name: string,
-	build: ((T: any) -> { any })?, -- nil = untyped
-	anf: boolean?, -- AllowNonFinite
+	build: ((T: any) -> { any })?,
+	anf: boolean?,
 	unreliable: boolean?,
-	inline: boolean?, -- Config.InlineTables (default true)
+	inline: boolean?,
 	values: { Args },
 }
 
@@ -39,7 +32,7 @@ local OLD: Side = {
 local D_MISSING = NOW.C.Decode.MISSING_INSTANCE
 local MAX_C2S = NOW.C.Limit.MAX_ARGS_C2S
 local MAX_S2C = NOW.C.Limit.MAX_ARGS_S2C
-local CUTS = 96 -- every cut below this, then a sample
+local CUTS = 96
 local MUTATION_SPOTS = 48
 local RANDOM_BUFFERS = 150
 local YIELD_EVERY = 400
@@ -49,12 +42,9 @@ local function args(...: any): Args
 	return table.pack(...)
 end
 
--- A mixed-type array (strict mode would infer a homogeneous literal).
 local function list(...: any): { any }
 	return { ... }
 end
-
--- Values ------------------------------------------------------------------------------------------------
 
 local folderA = Instance.new("Folder")
 folderA.Name = "FrozenA"
@@ -87,8 +77,6 @@ local mixedKeys: { [any]: any } = {}
 mixedKeys[true] = 1
 mixedKeys[2.5] = "x"
 
--- A canonical text for any value (maps sorted, NaN and -0 explicit, Instances by id), so values decoded by
--- the two sides (different tables) and sidecar copies compare by content.
 local function show(x: any, depth: number?): string
 	local d = depth or 0
 	if d > 64 then
@@ -136,8 +124,6 @@ local function hex(s: string): string
 		return string.format("%02x", string.byte(c))
 	end))
 end
-
--- Cases (each side builds its descriptors with its own T) ------------------------------------------------
 
 local function entity(id: any): { [string]: any }
 	return { id = id, pos = Vector3.new(1, 2, 3), hp = 100, name = "orc", alive = true, tags = { 1, 2 } }
@@ -382,8 +368,6 @@ local CASES: { Case } = {
 	},
 }
 
--- One side ------------------------------------------------------------------------------------------------
-
 type Encoded = { text: string, status: number, bytes: buffer?, refs: { any }, nrefs: number }
 
 local function compile(side: Side, case: Case, c2s: boolean): any
@@ -420,10 +404,8 @@ local function encodeOn(side: Side, pc: any, case: Case, c2s: boolean, values: A
 	return { text = text, status = st, bytes = bytes, refs = refs, nrefs = w.nrefs }
 end
 
--- One decode input: the bytes up to `lim`, and the frame's refs (C->S: `nrefs` of them, walked first).
 type Input = { b: buffer, lim: number, refs: { any }?, nrefs: number }
 
--- One decode as text. C->S: hostile, indexed refs checked by the sidecar walk; S->C: trusted, sequential refs.
 local function decodeOn(side: Side, pc: any, c2s: boolean, input: Input): string
 	local Codec = side.Codec
 	local refs, nrefs = input.refs, input.nrefs
@@ -448,7 +430,7 @@ local function decodeOn(side: Side, pc: any, c2s: boolean, input: Input): string
 	local argv = {}
 	local ok, n, q = pcall(pc.decode, input.b, 0, input.lim, ctx, argv)
 	if not ok then
-		return "decode threw" .. walk -- the texts name each side's module: only the fact is compared
+		return "decode threw" .. walk
 	end
 	local text = string.format("err=%d errArg=%d n=%s q=%s", ctx.err, ctx.errArg, tostring(n), tostring(q))
 	text ..= string.format(" cursor=%d%s", ctx.cursor, walk)
@@ -465,10 +447,8 @@ local function decodeOn(side: Side, pc: any, c2s: boolean, input: Input): string
 	return text
 end
 
--- Both sides ------------------------------------------------------------------------------------------------
-
 type Checker = {
-	pcs: { any }, -- [1] runtime, [2] frozen, for the direction being run
+	pcs: { any },
 	c2s: boolean,
 	mismatches: { string },
 	count: number,
@@ -505,7 +485,6 @@ local function randomBuffer(rng: Random, maxLen: number): buffer
 	local n = rng:NextInteger(0, maxLen)
 	local b = buffer.create(n)
 	for i = 0, n - 1 do
-		-- small values are likelier to form valid counts, lengths, presence bytes and tags
 		local roll = rng:NextNumber()
 		local x = if roll < 0.5 then rng:NextInteger(0, 3) elseif roll < 0.6 then 255 else rng:NextInteger(0, 255)
 		buffer.writeu8(b, i, x)
@@ -513,7 +492,6 @@ local function randomBuffer(rng: Random, maxLen: number): buffer
 	return b
 end
 
--- Truncations and single-byte mutations of one valid encoding.
 local function fuzzValid(ck: Checker, rng: Random, valid: Input, where: string)
 	local b, len = valid.b, valid.lim
 	for cut = 0, len - 1 do
@@ -560,7 +538,6 @@ local function runCase(case: Case, index: number): Checker
 			local valid: Input = { b = b, lim = buffer.len(b), refs = refs, nrefs = ea.nrefs }
 			sameDecode(ck, valid, where .. ": decode")
 			if not c2s and ea.nrefs > 0 then
-				-- The engine sends nil for an Instance this client cannot see.
 				local hidden: { any } = table.create(ea.nrefs)
 				for k, ref in ea.refs do
 					if typeof(ref) ~= "Instance" then

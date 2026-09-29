@@ -1,5 +1,4 @@
 --!strict
--- Decoded structs iterate (next, pairs) in frozen v2's order: optional, nil and handed-back fields included.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 
@@ -30,20 +29,18 @@ local OLD: Side = {
 
 local MAX_C2S = NOW.C.Limit.MAX_ARGS_C2S
 local MAX_S2C = NOW.C.Limit.MAX_ARGS_S2C
-local YIELD_AFTER = 0.05 -- seconds of work between yields (Studio stops a script that never yields)
-local CONTEXT = 48 -- characters shown before the first difference of two texts
-local TAIL = 160 -- characters shown from there on
-local TRIES = 400 -- random name sets tried per family when looking for ones a template would reorder
-local SHARP = 3 -- such name sets kept per family
-local PLAIN = 2 -- random name sets kept per family either way
+local YIELD_AFTER = 0.05
+local CONTEXT = 48
+local TAIL = 160
+local TRIES = 400
+local SHARP = 3
+local PLAIN = 2
 local NAN = 0 / 0
 
 local shown = Instance.new("Folder")
 shown.Name = "StructOrderShown"
 local ghost = Instance.new("Folder")
-ghost.Name = "StructOrderGhost" -- S->C: its sidecar slot is emptied, so it arrives missing (nil)
-
--- The order next() walks a value in (tables unsorted), NaN and -0 explicit, Instances by name --------------------
+ghost.Name = "StructOrderGhost"
 
 local function ordered(x: any, depth: number?): string
 	local d = depth or 0
@@ -68,8 +65,6 @@ local function ordered(x: any, depth: number?): string
 	end
 	return t .. ":" .. tostring(x)
 end
-
--- Mismatches: all of them are listed, each from just before its first differing character ---------------------
 
 local lastYield = os.clock()
 
@@ -103,8 +98,6 @@ local function check(ck: Checker)
 	end
 end
 
--- Shapes, built into descriptors by each side's own T ----------------------------------------------------------
-
 local function S(k: string, extra: { [string]: any }?): Shape
 	local s: Shape = { k = k }
 	if extra then
@@ -117,7 +110,7 @@ end
 
 local U8, U16, STR, V3, ANY, INST, EI = S("u8"), S("u16"), S("string"), S("V3"), S("any"), S("inst"), S("EI")
 local ENUM3 = S("enum", { items = { "A", "B", "C" } })
-local ENUM4 = S("enum", { items = { "A", "B", "C", "D" } }) -- the wire's enum: "D" is unknown to ENUM3
+local ENUM4 = S("enum", { items = { "A", "B", "C", "D" } })
 
 local function OPT(inner: Shape): Shape
 	return S("opt", { inner = inner })
@@ -169,8 +162,6 @@ local function compile(side: Side, shapes: { Shape }, anf: boolean, c2s: boolean
 	return side.Schema.compile(descs, anf, if c2s then MAX_C2S else MAX_S2C, false)
 end
 
--- Field kinds: each is decoded as `decode`, sent as `wire`, and toggles between its two values -------------------
-
 local function kind(decode: Shape, wire: Shape, a: any, b: any): Kind
 	return { decode = decode, wire = wire, values = { a, b }, toggles = a ~= b }
 end
@@ -178,13 +169,13 @@ end
 local KINDS: { [string]: Kind } = {
 	u8 = kind(U8, U8, 3, 3),
 	str = kind(STR, STR, "s", "s"),
-	opt = kind(OPT(U8), OPT(U8), nil, 5), -- absent or present
-	any = kind(ANY, ANY, nil, "x"), -- a required key that decodes nil or not
-	enum = kind(ENUM3, ENUM4, "A", "D"), -- trusted: an unknown index decodes nil; hostile: refused
-	ei = kind(EI, U16, Enum.Material.Plastic.Value, 65535), -- trusted: an unknown Value decodes nil
-	inst = kind(INST, INST, shown, ghost), -- S->C: the ghost arrives missing (nil)
-	opti = kind(OPT(INST), OPT(INST), nil, shown), -- a Nilable Instance under optional
-	v3 = kind(V3, V3, Vector3.one, Vector3.new(NAN, 1, 1)), -- NaN: fixedRun hands the struct to decodeFields
+	opt = kind(OPT(U8), OPT(U8), nil, 5),
+	any = kind(ANY, ANY, nil, "x"),
+	enum = kind(ENUM3, ENUM4, "A", "D"),
+	ei = kind(EI, U16, Enum.Material.Plastic.Value, 65535),
+	inst = kind(INST, INST, shown, ghost),
+	opti = kind(OPT(INST), OPT(INST), nil, shown),
+	v3 = kind(V3, V3, Vector3.one, Vector3.new(NAN, 1, 1)),
 }
 
 local FAMILIES: { Family } = {
@@ -259,7 +250,6 @@ local function modeName(m: Mode): string
 	return (if m.c2s then "C->S" else "S->C") .. (if m.anf then ", AllowNonFinite" else "")
 end
 
--- A family's struct over sorted names: field i (in name order, the struct's field order) is kinds[i]
 local function buildStruct(f: Family, names: { string }): Built
 	local decode: { [string]: Shape } = {}
 	local wire: { [string]: Shape } = {}
@@ -275,7 +265,6 @@ local function buildStruct(f: Family, names: { string }): Built
 	return { names = names, decode = STRUCT(decode), wire = STRUCT(wire), toggles = toggles }
 end
 
--- The struct's value for one mask: bit j picks the second value of the j-th toggling field
 local function structValue(f: Family, b: Built, mask: number): { [string]: any }
 	local v: { [string]: any } = {}
 	local bit = 0
@@ -310,8 +299,6 @@ local function randomNames(rng: Random, count: number): { string }
 	table.sort(names)
 	return names
 end
-
--- Encode (frozen v2, AllowNonFinite) and decode one payload on one side ---------------------------------------
 
 type Payload = { b: buffer, refs: { any }, nrefs: number }
 
@@ -370,9 +357,6 @@ local function decode(side: Side, pc: any, c2s: boolean, input: Payload): (strin
 	return text, argv
 end
 
--- Name sets: random ones, and ones where a template of the required fields iterates unlike frozen v2 -----------
-
--- What the pre-fix runtime built: a clone of { [required name] = false }, then every field set in order
 local function templateOrder(f: Family, names: { string }, t: { [string]: any }): string
 	local shape: { [string]: boolean } = {}
 	for i, name in names do
@@ -388,7 +372,6 @@ local function templateOrder(f: Family, names: { string }, t: { [string]: any })
 	return ordered(x)
 end
 
--- Some mask's S->C struct, decoded alone by frozen v2, iterates unlike that template
 local function sharp(f: Family, names: { string }): boolean
 	local b = buildStruct(f, names)
 	local enc = compile(OLD, { b.wire }, true, false)
@@ -425,8 +408,6 @@ local function nameSets(index: number, f: Family): Sets
 	return { list = list, sharp = found }
 end
 
--- Every mask of every name set, on every path and in every mode: runtime against frozen v2 ---------------------
-
 local function sweep(ck: Checker, f: Family, sets: { { string } })
 	for _, names in sets do
 		local b = buildStruct(f, names)
@@ -460,8 +441,6 @@ local function sweep(ck: Checker, f: Family, sets: { { string } })
 	end
 end
 
--- Test body ----------------------------------------------------------------------------------------------------
-
 return function(t: any)
 	local describe, it, expect = t.describe, t.it, t.expect
 
@@ -475,7 +454,6 @@ return function(t: any)
 			it(f.name, function()
 				local sets = nameSets(index, f)
 				if f.nilable then
-					-- without such a name set this sweep could not catch a template that reorders the keys
 					expect(sets.sharp).toBeGreaterThan(0)
 				end
 				local ck = newChecker()

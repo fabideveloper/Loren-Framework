@@ -1,13 +1,11 @@
 --!strict
 --!optimize 2
 
--- BridgeNet2 1.0.0 (bench/libs/bridgenet2): plain Luau tables, flushed and decoded on PostSimulation.
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local IS_SERVER = RunService:IsServer()
 
--- The same events as the .blink schemas; 1.0.0 has no unreliable channel, so those are n/a.
 local EVENTS = { "SBool", "SBoolArray", "SEntity", "SEntities", "SPose", "CBool", "CBoolArray", "CEntity", "CInput" }
 
 local BridgeNet2: any = nil
@@ -21,7 +19,6 @@ local R: any = {
 	sizeOf = nil,
 }
 
--- Its PostSimulation sends one FireClient per player with traffic.
 function R.txModel(_def: any): string
 	return "each"
 end
@@ -46,7 +43,6 @@ function a.has(event: string): boolean
 	return bridges[event] ~= nil
 end
 
--- Wrapped in one closure, like every other adapter; the method is looked up once.
 function a.toPlayer(event: string): ((Player, any) -> ())?
 	local bridge = bridges[event]
 	if bridge == nil then
@@ -58,7 +54,6 @@ function a.toPlayer(event: string): ((Player, any) -> ())?
 	end
 end
 
--- Queued per frame, then one FireClient per player (no FireAllClients).
 function a.toAll(event: string): ((any) -> ())?
 	local bridge = bridges[event]
 	if bridge == nil then
@@ -82,7 +77,6 @@ function a.toServer(event: string): ((any) -> ())?
 	end
 end
 
--- Server: fn(player, value). Client: fn(value). Same signatures as BridgeNet2's Connect.
 function a.connect(event: string, fn: (any, any) -> ()): boolean
 	local bridge = bridges[event]
 	if bridge == nil then
@@ -103,7 +97,6 @@ function R.setup(): { [string]: any }
 	return { bridgenet2 = a }
 end
 
--- The client says it loaded 15 frames after BridgeNet2 starts; until then the server queues its traffic.
 function R.ready()
 	ReplicatedStorage:WaitForChild("BridgeNet2"):WaitForChild("dataRemoteEvent")
 	if not IS_SERVER then

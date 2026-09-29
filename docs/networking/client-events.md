@@ -32,7 +32,7 @@ The listener gets the `player` first. Loren fills it in from the connection. The
 
 On the server, `self.ClientEvents.Emote` has `Connect`, `Once`, `Wait` (which returns `player, ...`) and `DisconnectAll`. `Fire` raises an error there: the server sends with Signals. A name that isn't in `ClientEvents` errors at your line, the same way `self.Signals` does.
 
-Each listener runs in its own thread, and Loren catches any error it throws. If one errors, the others still run, and Loren logs the error at most once per event every 10 seconds, so a client can't flood your log by making a listener fail on purpose.
+Loren catches any error a listener throws, and a listener that yields doesn't hold up the others. If one errors, the others still run, and Loren logs the error at most once per event every 10 seconds, so a client can't flood your log by making a listener fail on purpose.
 
 ## Fire from the client
 

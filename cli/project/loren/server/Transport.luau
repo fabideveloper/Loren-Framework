@@ -10,6 +10,7 @@ local C = require(Runtime.Constants)
 local Types = require(Runtime.Types)
 local Codec = require(Runtime.Codec)
 local Log = require(Runtime.Log)
+local Signal = require(Runtime.Signal)
 local Outbox = require(script.Parent.Outbox)
 local Dispatch = require(script.Parent.Dispatch)
 local Limits = require(script.Parent.Limits)
@@ -18,6 +19,29 @@ local Violations = require(script.Parent.Violations)
 type Route = Outbox.Route
 type RouteTable = Outbox.RouteTable
 type PlayerState = Outbox.PlayerState
+
+type Parse = {
+	owner: number,
+	busy: boolean,
+	pos: number,
+	node: any,
+	stop: number,
+	ps: any,
+	player: any,
+	frame: buffer,
+	len: number,
+	nmsg: number,
+	refs: any,
+	nrefs: number,
+	isUnreliable: boolean,
+	seq: number,
+	now: number,
+	p: number,
+	ev: any,
+	evN: number,
+	a1: any,
+	args: { any },
+}
 
 local N = C.Names
 local L = C.Limit
@@ -43,6 +67,9 @@ local KIND_SIGNAL = C.Kind.Signal
 local NOTICE_SHUTTING_DOWN = C.Notice.ShuttingDown
 local ARGV_CLEAR_MAX = 256
 local MEMORY_CATEGORY = N.MemoryCategory
+local ABANDONED = -1
+local DELIVER = -2
+local NO_FRAME = buffer.create(0)
 
 local V_ENVELOPE = V.Envelope
 local V_EXTRA_ARGS = V.ExtraArgs
@@ -71,7 +98,6 @@ local ADM_BUSY: number = Dispatch.BUSY
 local readVarint = Codec.readVarint
 local readHead = Codec.readHead
 local beginFrame = Codec.beginFrame
-local beginMessage = Codec.beginMessage
 local walkSidecar = Codec.walkSidecar
 local admitFrame = Limits.admitFrame
 local chargeBytes = Limits.chargeBytes
@@ -84,6 +110,12 @@ local sendErr = Outbox.sendErr
 local admit = Dispatch.admit
 local accept = Dispatch.accept
 local event = Dispatch.event
+local mwState = Dispatch.mwState
+local drive = Signal.drive
+local deliverEvent = Signal.ServerEvent.deliver
+local deliverEventIn = Signal.ServerEvent.deliverIn
+local deliverEventIn1 = Signal.ServerEvent.deliverIn1
+local quietEvent = Signal.ServerEvent.quiet
 
 local EMPTY_ROUTES: { Route } = table.freeze({}) :: any
 
@@ -104,6 +136,7 @@ local flushScheduled = false
 local generation = 0 -- bumped by prepare/_reset; an old flush thread sees it and ends
 local clock: () -> number = os.clock
 local parseFaultLogged = false
+local spareParse: Parse? = nil
 
 -- The server's decoder state: one ReadCtx and one argv (section 9 Scratch ownership).
 local ctx: Types.ReadCtx = Codec.newReadCtx(true, true)
@@ -172,133 +205,174 @@ end
 
 -- Receive ------------------------------------------------------------------------------------------
 
--- Section 4.10 step 8: every message of an admitted frame. Returns 0 or a C.Violation kind.
-@native
-local function parse(
-	ps: PlayerState,
-	frame: buffer,
-	len: number,
-	nmsg: number,
-	refs: any,
-	nrefs: number,
-	isUnreliable: boolean,
-	seq: number,
-	now: number
-): number
-	local c = ctx
-	beginFrame(c, refs, nrefs)
-	local lim = ps.lim
-	local viol = ps.viol
-	-- a. The sidecar, before the first message.
-	if nrefs > 0 then
-		local st, cost = walkSidecar(refs, nrefs, c)
-		if st ~= 0 then
-			return V_SIDECAR
+local function dropArgs(st: Parse)
+	local n = st.evN
+	st.a1 = nil
+	if n > 1 then
+		local args = st.args
+		for i = 1, n do
+			args[i] = nil
 		end
-		if not chargeBytes(lim, cost, now) then
-			Outbox.recordDrop(ps, isUnreliable, seq)
-			drop(viol, DROP_FRAME, 1)
-			return 0
+	end
+	st.evN = 0
+end
+
+-- Section 4.10 step 8: every message of an admitted frame. Returns 0, ABANDONED, DELIVER or a C.Violation kind.
+@native
+local function parse(st: Parse, me: number): number
+	local c = ctx
+	local len, nmsg = st.len, st.nmsg
+	local isUnreliable = st.isUnreliable
+	local now = st.now
+	local i = st.pos
+	local p = st.p
+	if i == 0 then
+		local ps: PlayerState = st.ps
+		local nrefs = st.nrefs
+		beginFrame(c, st.refs, nrefs)
+		-- a. The sidecar, before the first message.
+		if nrefs > 0 then
+			local status, cost = walkSidecar(st.refs, nrefs, c)
+			if status ~= 0 then
+				return V_SIDECAR
+			end
+			if not chargeBytes(ps.lim, cost, now) then
+				Outbox.recordDrop(ps, isUnreliable, st.seq)
+				drop(ps.viol, DROP_FRAME, 1)
+				return 0
+			end
 		end
 	end
 	-- b. Exactly nmsg messages.
-	local p = C2S_HEADER
-	for _ = 1, nmsg do
-		local mlen, q0 = readVarint(frame, p, len)
-		if mlen < 1 or mlen > len - q0 then
-			return V_FRAMING
+	while i < nmsg do
+		if st.owner ~= me then
+			return ABANDONED
 		end
-		local mend = q0 + mlen
-		local h, q = readHead(frame, q0, mend)
-		if h == 0 then
-			return V_FRAMING
-		end
-		if h < 0 then
-			-- Control: only HELLO flows C->S.
-			if h ~= NEG_HELLO then
-				return V_BAD_OP
+		i += 1
+		local ev: any = nil
+		local evN = 0
+		local a1: any = nil
+		do
+			local frame: buffer = st.frame
+			local ps: PlayerState = st.ps
+			local lim = ps.lim
+			local viol = ps.viol
+			local b0 = if p < len then buffer.readu8(frame, p) else 0x80
+			local mlen, q0
+			if b0 < 0x80 then
+				mlen, q0 = b0, p + 1
+			else
+				mlen, q0 = readVarint(frame, p, len)
 			end
-			if isUnreliable or nmsg ~= 1 or nrefs ~= 0 or mlen ~= 2 then
+			if mlen < 1 or mlen > len - q0 then
 				return V_FRAMING
 			end
-			if buffer.readu8(frame, q) ~= PROTO then
-				return V_BAD_OP
+			local mend = q0 + mlen
+			local h, q = buffer.readu8(frame, q0), q0 + 1
+			if h == 0 or h > 0xDF then
+				h, q = readHead(frame, q0, mend)
 			end
-			local hs = onHello(ps, now)
-			if hs ~= 0 then
-				return hs
+			if h == 0 then
+				return V_FRAMING
 			end
-			p = mend
-			continue
-		end
-		if not ps.helloed then
-			return V_BEFORE_HELLO
-		end
-		ps.helloOnly = false
-		local route = routes[h]
-		if route == nil or route.kind == KIND_SIGNAL or route.unreliable ~= isUnreliable then
-			return V_ROUTE
-		end
-		local args = route.args
-		if route.kind == KIND_METHOD then
-			-- b.6 Method
-			if not takeRoute(lim, h, route.rate, route.burst, now) then
-				if q + 2 <= mend then
-					local callId = buffer.readu16(frame, q)
-					if callId ~= 0 and allowRateLimitedReply(lim, h, now) then
-						sendErr(ps, callId, ERR.RateLimited, nil, nil, false, nil)
+			if h < 0 then
+				-- Control: only HELLO flows C->S.
+				if h ~= NEG_HELLO then
+					return V_BAD_OP
+				end
+				if isUnreliable or nmsg ~= 1 or st.nrefs ~= 0 or mlen ~= 2 then
+					return V_FRAMING
+				end
+				if buffer.readu8(frame, q) ~= PROTO then
+					return V_BAD_OP
+				end
+				local hs = onHello(ps, now)
+				if hs ~= 0 then
+					return hs
+				end
+				p = mend
+				continue
+			end
+			if not ps.helloed then
+				return V_BEFORE_HELLO
+			end
+			ps.helloOnly = false
+			local route = routes[h]
+			local kind = if route then route.kind else KIND_SIGNAL
+			if kind == KIND_SIGNAL or (route :: Route).unreliable ~= isUnreliable then
+				return V_ROUTE
+			end
+			local args = route.args
+			if kind == KIND_METHOD then
+				-- b.6 Method
+				if not takeRoute(lim, h, route.rate, route.burst, now) then
+					if q + 2 <= mend then
+						local callId = buffer.readu16(frame, q)
+						if callId ~= 0 and allowRateLimitedReply(lim, h, now) then
+							sendErr(ps, callId, ERR.RateLimited, nil, nil, false, nil)
+						else
+							drop(viol, DROP_SUPPRESSED, 1)
+						end
+					end
+					drop(viol, DROP_RATE_LIMITED, 1)
+					p = mend
+					continue
+				end
+				if q + 2 > mend then
+					return V_FRAMING
+				end
+				local callId = buffer.readu16(frame, q)
+				q += 2
+				if callId == 0 or ps.callTok[callId] ~= nil then
+					return V_DUPLICATE_CALL
+				end
+				if shuttingDown then
+					sendErr(ps, callId, ERR.ShuttingDown, nil, nil, false, nil)
+					p = mend
+					continue
+				end
+				local adm = admit(ps, route)
+				if adm == ADM_BUSY then
+					sendErr(ps, callId, ERR.Busy, nil, nil, false, nil)
+					drop(viol, DROP_BUSY, 1)
+					p = mend
+					continue
+				end
+				c.err = 0
+				c.errArg = 0
+				c.nodes = 0
+				c.claimed = 0
+				c.allowNonFinite = route.allowNonFinite
+				local n, qe = args.decode(frame, q, mend, c, argv)
+				local err = c.err
+				if err ~= 0 then
+					clearArgv(n, args.maxArgs)
+					if err < SEMANTIC_MIN then
+						return V_PAYLOAD
+					end
+					if allowBadRequestReply(lim, now) then
+						sendErr(ps, callId, ERR.BadRequest, DECODE_NAME[err], c.errArg, true, nil)
 					else
 						drop(viol, DROP_SUPPRESSED, 1)
 					end
+					drop(viol, DROP_BAD_REQUEST, 1)
+					p = mend
+					continue
 				end
-				drop(viol, DROP_RATE_LIMITED, 1)
-				p = mend
-				continue
-			end
-			if q + 2 > mend then
-				return V_FRAMING
-			end
-			local callId = buffer.readu16(frame, q)
-			q += 2
-			if callId == 0 or ps.callTok[callId] ~= nil then
-				return V_DUPLICATE_CALL
-			end
-			if shuttingDown then
-				sendErr(ps, callId, ERR.ShuttingDown, nil, nil, false, nil)
-				p = mend
-				continue
-			end
-			local adm = admit(ps, route)
-			if adm == ADM_BUSY then
-				sendErr(ps, callId, ERR.Busy, nil, nil, false, nil)
-				drop(viol, DROP_BUSY, 1)
-				p = mend
-				continue
-			end
-			beginMessage(c, route.allowNonFinite)
-			local n, qe = args.decode(frame, q, mend, c, argv)
-			local err = c.err
-			if err ~= 0 then
-				clearArgv(n, args.maxArgs)
-				if err < SEMANTIC_MIN then
+				if qe ~= mend then
+					clearArgv(n, args.maxArgs)
 					return V_PAYLOAD
 				end
-				if allowBadRequestReply(lim, now) then
-					sendErr(ps, callId, ERR.BadRequest, DECODE_NAME[err], c.errArg, true, nil)
+				accept(ps, route, callId, adm, argv, n, now)
+				if n == 1 then
+					argv[1] = nil
 				else
-					drop(viol, DROP_SUPPRESSED, 1)
+					clearArgv(n, 0)
 				end
-				drop(viol, DROP_BAD_REQUEST, 1)
+				messagesIn += 1
 				p = mend
 				continue
 			end
-			if qe ~= mend then
-				clearArgv(n, args.maxArgs)
-				return V_PAYLOAD
-			end
-			accept(ps, route, callId, adm, argv, n, now)
-			clearArgv(n, 0)
-		else
 			-- b.7 Event
 			if not takeRoute(lim, h, route.rate, route.burst, now) then
 				drop(viol, DROP_EVENT_LIMITED, 1)
@@ -323,7 +397,11 @@ local function parse(
 				ps.rxSeq[h] = s
 				ps.rxSeqT[h] = now
 			end
-			beginMessage(c, route.allowNonFinite)
+			c.err = 0
+			c.errArg = 0
+			c.nodes = 0
+			c.claimed = 0
+			c.allowNonFinite = route.allowNonFinite
 			local n, qe = args.decode(frame, q, mend, c, argv)
 			local err = c.err
 			if err ~= 0 then
@@ -339,17 +417,162 @@ local function parse(
 				clearArgv(n, args.maxArgs)
 				return V_PAYLOAD
 			end
-			event(ps, route, argv, n)
-			clearArgv(n, 0)
+			local module: any = route.module
+			local guarded = mwState.n > 0
+			if not guarded and type(module) == "table" then
+				local t: any = rawget(module, "Middleware")
+				guarded = if t == nil
+					then getmetatable(module) ~= nil
+					else type(t) == "table" and rawget(t, route.member) ~= nil
+			end
+			if guarded and event(ps, route, argv, n) then
+				if n == 1 then
+					argv[1] = nil
+				else
+					clearArgv(n, 0)
+				end
+				messagesIn += 1
+				p = mend
+				continue
+			end
+			local target: Types.ServerEvent = route.event :: any
+			if me == 0 then
+				if i < nmsg and not quietEvent(target) then
+					st.pos = i
+					st.p = mend
+					st.ev = target
+					st.evN = n
+					if n == 1 then
+						st.a1 = argv[1]
+						argv[1] = nil
+					elseif n > 1 then
+						table.move(argv, 1, n, 1, st.args)
+						clearArgv(n, 0)
+					end
+					return DELIVER
+				end
+				if n == 1 then
+					deliverEvent(target, ps.player, argv[1])
+					argv[1] = nil
+				else
+					deliverEvent(target, ps.player, table.unpack(argv, 1, n))
+					clearArgv(n, 0)
+				end
+				messagesIn += 1
+				p = mend
+				continue
+			end
+			st.pos = i
+			st.p = mend
+			st.ev = target
+			st.evN = n
+			if n == 1 then
+				a1 = argv[1]
+				argv[1] = nil
+				st.a1 = a1
+			elseif n > 1 then
+				table.move(argv, 1, n, 1, st.args)
+				clearArgv(n, 0)
+			end
+			ev = target
+			evN = n
+			p = mend
+		end
+		local delivered = if evN == 1
+			then deliverEventIn1(st, me, ev, st.player, a1)
+			else deliverEventIn(st, me, ev, st.player, table.unpack(st.args, 1, evN))
+		if not delivered then
+			return ABANDONED
+		end
+		st.ev = nil
+		if evN > 1 then
+			dropArgs(st)
+		else
+			st.a1 = nil
+			st.evN = 0
 		end
 		messagesIn += 1
-		p = mend
 	end
 	-- c. Nothing may follow the last message.
 	if p ~= len then
 		return V_FRAMING
 	end
 	return 0
+end
+
+local function finishFrame(st: Parse, ok: boolean, status: any)
+	local ps, player, now = st.ps, st.player, st.now
+	if st.nrefs > 0 then
+		beginFrame(ctx, nil, 0) -- releases the frame's refs
+	end
+	st.ps = nil
+	st.player = nil
+	st.frame = NO_FRAME
+	st.refs = nil
+	st.ev = nil
+	dropArgs(st)
+	if not ok then
+		if not parseFaultLogged then
+			parseFaultLogged = true
+			Log.warnf("a frame from uid=%d failed to decode (backstop): %s", player.UserId, tostring(status))
+		end
+		clearArgv(0, ARGV_CLEAR_MAX)
+		record(player, ps.viol, V_PAYLOAD, now)
+	elseif status > 0 then
+		record(player, ps.viol, status, now)
+	end
+end
+
+local function deliverLoop(st: Parse, me: number): number
+	local ev = st.ev
+	if ev == nil then
+		error("the frame parse stopped outside a listener", 0)
+	end
+	local n = st.evN
+	local delivered = if n == 1
+		then deliverEventIn1(st, me, ev, st.player, st.a1)
+		else deliverEventIn(st, me, ev, st.player, table.unpack(st.args, 1, n))
+	if not delivered then
+		return ABANDONED
+	end
+	st.ev = nil
+	dropArgs(st)
+	messagesIn += 1
+	return parse(st, me)
+end
+
+local function parseBody(st: Parse, me: number)
+	local ok, status = pcall(deliverLoop, st, me)
+	if st.owner ~= me then
+		return
+	end
+	st.busy = false
+	finishFrame(st, ok, status)
+end
+
+local function newParse(): Parse
+	return {
+		owner = 0,
+		busy = false,
+		pos = 0,
+		node = nil,
+		stop = 0,
+		ps = nil,
+		player = nil,
+		frame = NO_FRAME,
+		len = 0,
+		nmsg = 0,
+		refs = nil,
+		nrefs = 0,
+		isUnreliable = false,
+		seq = 0,
+		now = 0,
+		p = 0,
+		ev = nil,
+		evN = 0,
+		a1 = nil,
+		args = {},
+	}
 end
 
 -- One remote invocation (section 4.10 steps 1-8). `extra` = arguments after (frame, refs).
@@ -402,20 +625,37 @@ local function onFrame(isUnreliable: boolean, player: Player, frame: any, refs: 
 	end
 	framesIn += 1
 	bytesIn += len
-	local ok, status = pcall(parse, ps, b, len, nmsg, refs, nrefs, isUnreliable, seq, now)
-	if nrefs > 0 then
-		beginFrame(ctx, nil, 0) -- releases the frame's refs
-	end
-	if not ok then
-		if not parseFaultLogged then
-			parseFaultLogged = true
-			Log.warnf("a frame from uid=%d failed to decode (backstop): %s", player.UserId, tostring(status))
+	local st = spareParse or newParse()
+	spareParse = nil
+	st.ps = ps
+	st.player = player
+	st.frame = b
+	st.len = len
+	st.nmsg = nmsg
+	st.refs = refs
+	st.nrefs = nrefs
+	st.isUnreliable = isUnreliable
+	st.seq = seq
+	st.now = now
+	st.pos = 0
+	st.p = C2S_HEADER
+	st.node = nil
+	st.ev = nil
+	st.evN = 0
+	st.owner = 0
+	st.busy = true
+	local ok, status = pcall(parse, st, 0)
+	if ok and status == DELIVER then
+		local driven, done = pcall(drive, parseBody, st)
+		if not driven or not done then
+			st.busy = false
+			finishFrame(st, false, if driven then "the frame parse stopped outside a listener" else done)
 		end
-		clearArgv(0, ARGV_CLEAR_MAX)
-		record(player, ps.viol, V_PAYLOAD, now)
-	elseif status > 0 then
-		record(player, ps.viol, status, now)
+	else
+		st.busy = false
+		finishFrame(st, ok, status)
 	end
+	spareParse = st
 end
 
 local function onPlayerAdded(player: Player)
@@ -699,6 +939,9 @@ Transport._test = table.freeze({
 	-- The decoder's argv (every slot must be nil between frames).
 	argv = function(): { any }
 		return argv
+	end,
+	refsHeld = function(): boolean
+		return ctx.refs ~= nil
 	end,
 	net = function(): Folder?
 		return net

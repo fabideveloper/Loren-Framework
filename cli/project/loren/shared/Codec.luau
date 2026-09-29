@@ -96,6 +96,7 @@ local D_BAD_KEY = C.Decode.BAD_KEY
 local D_TOO_MANY_ARGS = C.Decode.TOO_MANY_ARGS
 
 local visiting: { [any]: boolean } = {}
+local visitDirty = false
 local walkT: { any } = {}
 local walkD: { number } = {}
 
@@ -136,6 +137,7 @@ local function newWriter(cap: number, indexedRefs: boolean): Writer
 end
 
 -- Once per message. Keeps buf/cap and the owner's flags (indexedRefs, inlineTables, unreliable).
+@native
 local function resetWriter(w: Writer)
 	w.n = 0
 	local refs = w.refs
@@ -150,12 +152,16 @@ local function resetWriter(w: Writer)
 	w.lossy = 0
 	w.errArg = 0
 	-- Only non-empty if an encode was aborted by an engine error (e.g. a buffer over 1 GiB).
-	if next(visiting) ~= nil then
-		table.clear(visiting)
+	if visitDirty then
+		visitDirty = false
+		if next(visiting) ~= nil then
+			table.clear(visiting)
+		end
 	end
 end
 
 -- Returns the write offset and advances n. Read w.buf only after this call (grow replaces it).
+@native
 local function reserve(w: Writer, k: number): number
 	local o = w.n
 	local need = o + k
@@ -406,6 +412,7 @@ local function copyRec(w: Writer, t: { [any]: any }, depth: number, cs: boolean)
 	if getmetatable(t :: any) ~= nil then
 		w.lossy += 1
 	end
+	visitDirty = true
 	visiting[t] = true
 	local out: { [any]: any } = table.create(rawlen(t)) :: any
 	local vd = depth + 1
@@ -578,6 +585,7 @@ local function writeValue(w: Writer, v: any, depth: number): number
 					local b = w.buf
 					buffer.writeu8(b, o, T_ARRAY)
 					putVarint(b, o + 1, len)
+					visitDirty = true
 					visiting[v] = true
 					local d = depth + 1
 					for i = 1, len do
@@ -598,6 +606,7 @@ local function writeValue(w: Writer, v: any, depth: number): number
 					local b = w.buf
 					buffer.writeu8(b, o, T_MAP)
 					putVarint(b, o + 1, count)
+					visitDirty = true
 					visiting[v] = true
 					local d = depth + 1
 					for k, x in next, v do
@@ -1261,6 +1270,7 @@ end
 
 local function reset()
 	table.clear(visiting)
+	visitDirty = false
 	table.clear(walkT)
 	table.clear(walkD)
 end
@@ -1277,6 +1287,7 @@ return table.freeze({
 	newWriter = newWriter,
 	resetWriter = resetWriter,
 	reserve = reserve,
+	grow = grow,
 	writeU8 = writeU8,
 	writeU16 = writeU16,
 	writeU32 = writeU32,

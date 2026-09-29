@@ -1,0 +1,44 @@
+-- Shared Loren signal benchmark schema, upstream Blink dialect (compiler v0.18.9).
+-- Same logical events as ../blinkblox/Bench.blink. Blink has no inbound limits, no Rate/Burst,
+-- no BatchUnreliable and no CFrame<quat>, so those are absent here.
+option ClientOutput = "./Client.luau"
+option ServerOutput = "./Server.luau"
+-- Own remote names, so it can live in one place with BlinkBlox.
+option RemoteScope = "BLINK"
+
+-- 2 + 12 + 12 + 1 + 3 (one byte per boolean) = 30 bytes (+1 event id)
+struct Entity {
+	id: u16,
+	position: vector,
+	orientation: vector,
+	health: u8,
+	alive: boolean,
+	moving: boolean,
+	crouched: boolean
+}
+
+-- 2 + 1 + 1 + 4 + 2 = 10 bytes (+1 event id)
+struct Input {
+	seq: u16,
+	moveX: i8,
+	moveZ: i8,
+	yaw: f32,
+	jump: boolean,
+	sprint: boolean
+}
+
+-- [[ Server -> Client ]]
+event SBool { From: Server, Type: Reliable, Call: SingleSync, Data: boolean }
+event SBoolArray { From: Server, Type: Reliable, Call: SingleSync, Data: boolean[0..1000] }
+event SEntity { From: Server, Type: Reliable, Call: SingleSync, Data: Entity }
+event SEntities { From: Server, Type: Reliable, Call: SingleSync, Data: Entity[0..100] }
+event SEntityUnreliable { From: Server, Type: Unreliable, Call: SingleSync, Data: Entity }
+-- Blink: default CFrame = f32 position + f32 ToOrientation() Euler angles = 24 bytes.
+event SPose { From: Server, Type: Reliable, Call: SingleSync, Data: CFrame }
+
+-- [[ Client -> Server ]]
+event CBool { From: Client, Type: Reliable, Call: SingleSync, Data: boolean }
+event CBoolArray { From: Client, Type: Reliable, Call: SingleSync, Data: boolean[0..1000] }
+event CEntity { From: Client, Type: Reliable, Call: SingleSync, Data: Entity }
+event CInput { From: Client, Type: Reliable, Call: SingleSync, Data: Input }
+event CInputUnreliable { From: Client, Type: Unreliable, Call: SingleSync, Data: Input }

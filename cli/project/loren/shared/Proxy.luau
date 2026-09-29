@@ -139,17 +139,8 @@ end
 
 local function makeEvent(route: ClientRoute): Types.ClientEvent
 	local ev: any = {}
-	local fire = ClientNet.fire
 	local path = route.service .. ".ClientEvents." .. route.member
-	ev.Fire = function(self: any, ...: any)
-		if self == ev then
-			fire(route, select("#", ...), ...)
-		elseif self == nil and select("#", ...) == 0 then
-			fire(route, 0)
-		else
-			error(PREFIX .. "Call " .. path .. ":Fire(...) with ':' (a '.' call shifts every argument)", 2)
-		end
-	end
+	ev.Fire = ClientNet.eventFire(route, ev, path)
 	ev.Connect = wrongSide
 	ev.Once = wrongSide
 	ev.Wait = wrongSide

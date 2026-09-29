@@ -161,6 +161,7 @@ local SCRATCH_KEEP = 4 * S2C_SEAL -- a scratch grown past this by one big messag
 local BOUNDARY_KEEP = 1024 -- boundary arrays that held more messages are replaced after their flush
 
 local reserve = Codec.reserve
+local grow = Codec.grow
 local resetWriter = Codec.resetWriter
 local writeU8 = Codec.writeU8
 local writeU16 = Codec.writeU16
@@ -247,8 +248,24 @@ local function commit(ps: PlayerState, w: Writer, callId: number): ()
 	local cw = ch.w
 	local n = w.n
 	local refBase = cw.nrefs
-	local o = reserve(cw, n)
-	buffer.copy(cw.buf, o, w.buf, 0, n)
+	local o = cw.n
+	local need = o + n
+	if need > cw.cap then
+		grow(cw, need)
+	end
+	cw.n = need
+	local b, src = cw.buf, w.buf
+	if n > 8 then
+		buffer.copy(b, o, src, 0, n)
+	elseif n >= 4 then
+		buffer.writeu32(b, o + n - 4, buffer.readu32(src, n - 4))
+		buffer.writeu32(b, o, buffer.readu32(src, 0))
+	elseif n >= 2 then
+		buffer.writeu16(b, o + n - 2, buffer.readu16(src, n - 2))
+		buffer.writeu16(b, o, buffer.readu16(src, 0))
+	elseif n == 1 then
+		buffer.writeu8(b, o, buffer.readu8(src, 0))
+	end
 	local nr = w.nrefs
 	if nr > 0 then
 		table.move(w.refs, 1, nr, refBase + 1, cw.refs)
@@ -268,17 +285,38 @@ local function commit(ps: PlayerState, w: Writer, callId: number): ()
 end
 Outbox.commit = commit
 
+@native
 local function commitUnreliable(ps: PlayerState, w: Writer)
 	local ch = ps.uout
 	local cw = ch.w
 	local n = w.n
-	local o = reserve(cw, n)
-	buffer.copy(cw.buf, o, w.buf, 0, n)
+	local o = cw.n
+	local need = o + n
+	if need > cw.cap then
+		grow(cw, need)
+	end
+	cw.n = need
+	local b, src = cw.buf, w.buf
+	if n > 8 then
+		buffer.copy(b, o, src, 0, n)
+	elseif n >= 4 then
+		buffer.writeu32(b, o + n - 4, buffer.readu32(src, n - 4))
+		buffer.writeu32(b, o, buffer.readu32(src, 0))
+	elseif n >= 2 then
+		buffer.writeu16(b, o + n - 2, buffer.readu16(src, n - 2))
+		buffer.writeu16(b, o, buffer.readu16(src, 0))
+	elseif n == 1 then
+		buffer.writeu8(b, o, buffer.readu8(src, 0))
+	end
 	local k = ch.nmsg + 1
 	ch.nmsg = k
 	ch.starts[k] = o
 	messagesOut += 1
-	markDirty(ps)
+	if not ps.dirty then
+		ps.dirty = true
+		dirtyN += 1
+		dirty[dirtyN] = ps
+	end
 end
 
 -- Writes a NOTICE straight into the reliable channel (no dirty mark: the flush calls it).
@@ -364,6 +402,13 @@ function Outbox.abort(): ()
 	resetWriter(scratch)
 end
 
+Outbox.scratch = scratch
+Outbox.SCRATCH_KEEP = SCRATCH_KEEP
+
+function Outbox.tidy(): ()
+	takeScratch()
+end
+
 -- A reliable non-reply message (SIGNAL) for one player.
 function Outbox.send(ps: PlayerState, w: Writer): ()
 	if ps.helloed then
@@ -386,6 +431,205 @@ function Outbox.sendUnreliable(ps: PlayerState, w: Writer): ()
 		Violations.drop(ps.viol, DROP_UNRELIABLE_EARLY, 1)
 	end
 end
+
+@native
+local function words(src: buffer, n: number): (number, number)
+	if n > 8 then
+		return 0, 0
+	elseif n >= 4 then
+		return buffer.readu32(src, n - 4), buffer.readu32(src, 0)
+	elseif n >= 2 then
+		return buffer.readu16(src, n - 2), buffer.readu16(src, 0)
+	elseif n == 1 then
+		return 0, buffer.readu8(src, 0)
+	end
+	return 0, 0
+end
+
+@native
+local function broadcast(w: Writer): ()
+	local n, src, nr = w.n, w.buf, w.nrefs
+	local tail, head = words(src, n)
+	for i = 1, #list do
+		local ps = list[i]
+		if ps.helloed then
+			if not ps.gone then
+				local ch = ps.out
+				local cw = ch.w
+				local refBase = cw.nrefs
+				local o = cw.n
+				local need = o + n
+				if need > cw.cap then
+					grow(cw, need)
+				end
+				cw.n = need
+				local b = cw.buf
+				if n > 8 then
+					buffer.copy(b, o, src, 0, n)
+				elseif n >= 4 then
+					buffer.writeu32(b, o + n - 4, tail)
+					buffer.writeu32(b, o, head)
+				elseif n >= 2 then
+					buffer.writeu16(b, o + n - 2, tail)
+					buffer.writeu16(b, o, head)
+				elseif n == 1 then
+					buffer.writeu8(b, o, head)
+				end
+				if nr > 0 then
+					table.move(w.refs, 1, nr, refBase + 1, cw.refs)
+					cw.nrefs = refBase + nr
+				end
+				local k = ch.nmsg + 1
+				ch.nmsg = k
+				ch.starts[k] = o
+				ch.refStarts[k] = refBase
+				ch.callIds[k] = 0
+				messagesOut += 1
+				if not ps.dirty then
+					ps.dirty = true
+					dirtyN += 1
+					dirty[dirtyN] = ps
+				end
+			end
+		elseif not ps.gone then
+			queueEarly(ps, w)
+			n, src, nr = w.n, w.buf, w.nrefs
+			tail, head = words(src, n)
+		end
+	end
+end
+Outbox.broadcast = broadcast
+
+@native
+local function broadcastUnreliable(w: Writer): ()
+	local n, src = w.n, w.buf
+	local tail, head = words(src, n)
+	for i = 1, #list do
+		local ps = list[i]
+		if ps.gone then
+			continue
+		end
+		if ps.helloed then
+			local ch = ps.uout
+			local cw = ch.w
+			local o = cw.n
+			local need = o + n
+			if need > cw.cap then
+				grow(cw, need)
+			end
+			cw.n = need
+			local b = cw.buf
+			if n > 8 then
+				buffer.copy(b, o, src, 0, n)
+			elseif n >= 4 then
+				buffer.writeu32(b, o + n - 4, tail)
+				buffer.writeu32(b, o, head)
+			elseif n >= 2 then
+				buffer.writeu16(b, o + n - 2, tail)
+				buffer.writeu16(b, o, head)
+			elseif n == 1 then
+				buffer.writeu8(b, o, head)
+			end
+			local k = ch.nmsg + 1
+			ch.nmsg = k
+			ch.starts[k] = o
+			messagesOut += 1
+			if not ps.dirty then
+				ps.dirty = true
+				dirtyN += 1
+				dirty[dirtyN] = ps
+			end
+		else
+			Violations.drop(ps.viol, DROP_UNRELIABLE_EARLY, 1)
+		end
+	end
+end
+Outbox.broadcastUnreliable = broadcastUnreliable
+
+@native
+local function broadcastBut(w: Writer, except: any, unreliable: boolean): ()
+	for i = 1, #list do
+		local ps = list[i]
+		if ps.player ~= except then
+			if unreliable then
+				if not ps.gone then
+					if ps.helloed then
+						commitUnreliable(ps, w)
+					else
+						Violations.drop(ps.viol, DROP_UNRELIABLE_EARLY, 1)
+					end
+				end
+			elseif ps.helloed then
+				if not ps.gone then
+					commit(ps, w, 0)
+				end
+			elseif not ps.gone then
+				queueEarly(ps, w)
+			end
+		end
+	end
+end
+Outbox.broadcastBut = broadcastBut
+
+@native
+local function broadcastExcept(w: Writer, set: { [any]: boolean }, unreliable: boolean): ()
+	for i = 1, #list do
+		local ps = list[i]
+		if not set[ps.player] then
+			if unreliable then
+				if not ps.gone then
+					if ps.helloed then
+						commitUnreliable(ps, w)
+					else
+						Violations.drop(ps.viol, DROP_UNRELIABLE_EARLY, 1)
+					end
+				end
+			elseif ps.helloed then
+				if not ps.gone then
+					commit(ps, w, 0)
+				end
+			elseif not ps.gone then
+				queueEarly(ps, w)
+			end
+		end
+	end
+end
+Outbox.broadcastExcept = broadcastExcept
+
+@native
+local function placed(ps: PlayerState, o: number, need: number): ()
+	local ch = ps.out
+	local cw = ch.w
+	cw.n = need
+	local k = ch.nmsg + 1
+	ch.nmsg = k
+	ch.starts[k] = o
+	ch.refStarts[k] = cw.nrefs
+	ch.callIds[k] = 0
+	messagesOut += 1
+	if not ps.dirty then
+		ps.dirty = true
+		dirtyN += 1
+		dirty[dirtyN] = ps
+	end
+end
+Outbox.placed = placed
+
+@native
+local function placedUnreliable(ps: PlayerState, o: number, need: number): ()
+	local ch = ps.uout
+	ch.w.n = need
+	local k = ch.nmsg + 1
+	ch.nmsg = k
+	ch.starts[k] = o
+	messagesOut += 1
+	if not ps.dirty then
+		ps.dirty = true
+		dirtyN += 1
+		dirty[dirtyN] = ps
+	end
+end
+Outbox.placedUnreliable = placedUnreliable
 
 -- A Fire to a player who already left (no state): a no-op, counted in GetStats().SignalsDropped.
 function Outbox.departed(): ()
@@ -1014,6 +1258,8 @@ end
 function Outbox.players(): { PlayerState }
 	return list
 end
+
+Outbox.states = states
 
 -- Transport.prepare: the remotes flushes fire on (nil unbinds).
 function Outbox.bind(reliable: RemoteEvent?, unreliable: UnreliableRemoteEvent?): ()

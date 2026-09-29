@@ -85,6 +85,9 @@
 				"RawServer": {
 					"$path": "raw/RawServer.luau"
 				},
+				"Frozen": {
+					"$path": "specs/frozen"
+				},
 				"Specs": {
 					"$className": "Folder",
 					"Runner": {

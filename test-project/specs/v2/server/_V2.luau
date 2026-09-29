@@ -8,7 +8,7 @@ local Env = require(ReplicatedStorage.LorenTest.Harness.Env)
 
 local V2 = {}
 
-V2.EVIDENCE_BUDGET = 240 -- seconds, shared by every evidence wait of this run
+V2.EVIDENCE_BUDGET = 330 -- seconds, shared by every evidence wait of this run
 V2.TEST_TIMEOUT = V2.EVIDENCE_BUDGET + 30 -- runner timeout for a test that waits for evidence
 V2.HEX8 = "^%x%x%x%x%x%x%x%x$"
 

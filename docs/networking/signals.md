@@ -90,7 +90,7 @@ connection:Disconnect()
 print(connection.Connected) -- false
 ```
 
-Listeners run in the order they connected, each in its own thread, so one that yields doesn't hold up the rest. A listener that errors shows up in the output like any script error, and the others still run. A listener connected during a fire starts with the next message; one disconnected during a fire is skipped. Calling `Fire` on the client raises an error: clients send with [Client events](./client-events.md).
+Listeners run in the order they connected, and one that yields doesn't hold up the rest. A listener that errors shows up in the output like any script error, and the others still run. A listener connected during a fire starts with the next message; one disconnected during a fire is skipped. Calling `Fire` on the client raises an error: clients send with [Client events](./client-events.md).
 
 ## Messages sent before you connect
 

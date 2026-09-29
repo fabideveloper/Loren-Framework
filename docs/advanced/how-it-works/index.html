@@ -9,7 +9,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/Loren-Framework/img/favicon-192.png">
 <script>document.documentElement.setAttribute("data-js","")</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800;900&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&amp;family=Space+Mono:wght@400;700&amp;family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&amp;display=swap"><link rel="stylesheet" href="/Loren-Framework/assets/css/styles.5969232f.css">
-<script src="/Loren-Framework/assets/js/runtime~main.0b0e4542.js" defer="defer"></script>
+<script src="/Loren-Framework/assets/js/runtime~main.393589ae.js" defer="defer"></script>
 <script src="/Loren-Framework/assets/js/main.22cbf106.js" defer="defer"></script>
 </head>
 <body>
@@ -44,7 +44,7 @@
 <li class="">That adds at most one Heartbeat of delay on the server, and at most 1/61 of a second on the client.</li>
 <li class=""><code>Loren.Flush()</code> sends now. On the client it still respects the 61-a-second limit, so it may wait for the next slot.</li>
 </ul>
-<p>A client frame closes at 16 KiB and the next message starts a new one (a single larger message, up to 64 KiB, goes alone). Server frames close at 64 KiB, and a larger message goes alone. An unreliable fire is at most 900 bytes.</p>
+<p>A client frame closes at 60 KiB and the next message starts a new one (a single larger message, up to 64 KiB, goes alone). Server frames close at 64 KiB, and a larger message goes alone. An unreliable fire is at most 900 bytes.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="what-a-frame-looks-like">What a frame looks like<a href="#what-a-frame-looks-like" class="hash-link" aria-label="Direct link to What a frame looks like" title="Direct link to What a frame looks like" translate="no">​</a></h2>
 <p>A frame from a client starts with a 5-byte header: a sequence number (2 bytes), the message count (2 bytes) and the number of sidecar values (1 byte, see below). Then the messages, each one a length, a route id and a body. A frame from the server is messages back to back, with no header and no lengths.</p>
 <table><thead><tr><th style="text-align:left">Message</th><th style="text-align:left">Body</th></tr></thead><tbody><tr><td style="text-align:left">Call</td><td style="text-align:left">Route, call id (2 bytes), arguments</td></tr><tr><td style="text-align:left">Event, Signal</td><td style="text-align:left">Route, a 2-byte sequence number if <code>Ordered</code>, arguments</td></tr><tr><td style="text-align:left">OK</td><td style="text-align:left">Call id, return values</td></tr><tr><td style="text-align:left">ERR</td><td style="text-align:left">Call id, error code, flags, then the message text, data and incident id when present</td></tr><tr><td style="text-align:left">NOTICE</td><td style="text-align:left">Tells the client about dropped frames, a server shutdown, or messages lost before its handshake</td></tr><tr><td style="text-align:left">HELLO, MANIFEST</td><td style="text-align:left">The handshake</td></tr></tbody></table>

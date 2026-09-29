@@ -9,7 +9,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/Loren-Framework/img/favicon-192.png">
 <script>document.documentElement.setAttribute("data-js","")</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800;900&amp;family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,700;1,8..60,400&amp;family=Space+Mono:wght@400;700&amp;family=JetBrains+Mono:ital,wght@0,400;0,700;1,400&amp;display=swap"><link rel="stylesheet" href="/Loren-Framework/assets/css/styles.5969232f.css">
-<script src="/Loren-Framework/assets/js/runtime~main.0b0e4542.js" defer="defer"></script>
+<script src="/Loren-Framework/assets/js/runtime~main.393589ae.js" defer="defer"></script>
 <script src="/Loren-Framework/assets/js/main.22cbf106.js" defer="defer"></script>
 </head>
 <body>
@@ -52,7 +52,7 @@ overhead.</li>
 errors players should see, <code>LorenExtinguish</code> for shutdown, and <code>Loren.Testing</code> for specs without a server.</li>
 </ul>
 <p>We measured all of this in Roblox Studio:</p>
-<table><thead><tr><th>Test</th><th>Result</th></tr></thead><tbody><tr><td>Exploiter bot, 48,190 garbage packets at about 2,400 a second</td><td>0 accepted. Honest players: 1,206 of 1,206 calls OK. Server frame time unchanged (p99 6.1 ms), 0 server warnings.</td></tr><tr><td>The same attack on 1.5.1</td><td>47,364 warnings (about 142k a minute), a server frame about 3x slower, route ids stolen through the handshake RemoteFunction, 43 handler crashes from crafted packets.</td></tr><tr><td>Stress, 3 players at 60 calls a second each</td><td>100% of calls OK, 0 lost or reordered signals, about 1.8 µs average handler cost, round trip p50 about 15 ms on one machine.</td></tr><tr><td>Test suite, with 1 and 3 players</td><td>1,212 tests passed, 0 failed.</td></tr></tbody></table>
+<table><thead><tr><th>Test</th><th>Result</th></tr></thead><tbody><tr><td>Exploiter bot, 48,190 garbage packets at about 2,400 a second</td><td>0 accepted. Honest players: 1,206 of 1,206 calls OK. Server frame time unchanged (p99 6.1 ms), 0 server warnings.</td></tr><tr><td>The same attack on 1.5.1</td><td>47,364 warnings (about 142k a minute), a server frame about 3x slower, route ids stolen through the handshake RemoteFunction, 43 handler crashes from crafted packets.</td></tr><tr><td>Stress, 3 players at 60 calls a second each</td><td>100% of calls OK, 0 lost or reordered signals, about 1.8 µs average handler cost, round trip p50 about 15 ms on one machine.</td></tr><tr><td>Test suite, with 3 players</td><td>1,555 tests passed, 0 failed.</td></tr></tbody></table>
 <p>The CLI&#x27;s own suite (141 tests, run with Node) passes too, including real Rojo and Argon runs.</p>
 <p>Loren can&#x27;t check your game logic, though. It stops malformed packets, but a client can still call <code>BuyItem</code> with
 arguments a normal player could send. Checking prices, cooldowns and ownership is your job.
